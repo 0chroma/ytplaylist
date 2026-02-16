@@ -1,0 +1,31 @@
+# Cabal build artifacts
+dist/
+dist-newstyle/
+*.o
+*.hi
+*.chi
+*.chs.h
+*.dyn_o
+*.dyn_hi
+
+# Credentials and tokens (NEVER commit these!)
+client_secrets.json
+ytplaylist_token.json
+
+# Editor files
+*~
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Stack
+.stack-work/
+
+# Local configuration
+.cabal-sandbox/
+cabal.sandbox.config

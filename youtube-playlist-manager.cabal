@@ -1,0 +1,44 @@
+cabal-version:       2.4
+name:                youtube-playlist-manager
+version:             0.1.0.0
+synopsis:            Manage YouTube playlists using the Data API
+license:             MIT
+author:              User
+category:            Web
+build-type:          Simple
+
+executable ytplaylist
+  main-is:             Main.hs
+  build-depends:       base >= 4.14 && < 5
+                     , aeson >= 2.0
+                     , aeson-pretty
+                     , bytestring
+                     , text
+                     , http-conduit
+                     , http-types
+                     , directory
+                     , filepath
+                     , process
+                     , time
+  default-language:    Haskell2010
+  ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N -O2
+
+test-suite ytplaylist-test
+  type:                exitcode-stdio-1.0
+  main-is:             Test.hs
+  hs-source-dirs:      test
+  build-depends:       base >= 4.14 && < 5
+                     , aeson >= 2.0
+                     , aeson-pretty
+                     , bytestring
+                     , text
+                     , http-conduit
+                     , http-types
+                     , directory
+                     , filepath
+                     , process
+                     , time
+                     , tasty
+                     , tasty-hunit
+  default-language:    Haskell2010
+  ghc-options:         -Wall -threaded
