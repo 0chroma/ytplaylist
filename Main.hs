@@ -22,6 +22,7 @@ import System.IO (hFlush, stdout)
 
 import Control.Exception (try, SomeException)
 import Data.Time.Clock.POSIX (getPOSIXTime)
+import Data.List (find)
 import System.Process (proc, createProcess, waitForProcess, std_out, std_err, StdStream(..))
 import qualified Data.ByteString.Lazy.Char8 as BL8
 
@@ -506,6 +507,78 @@ deletePlaylist token playlistId = do
   response <- httpLbs request' manager
   return $ responseStatus response == status204
 
+-- | Find playlist item ID by video ID
+findItemIdByVideoId :: TokenResponse -> T.Text -> T.Text -> IO (Maybe T.Text)
+findItemIdByVideoId token playlistId videoId = do
+  items <- fetchPlaylistItems token playlistId
+  return $ plitem_id <$> find (\item -> res_videoId (plitem_resourceId $ plitem_snippet item) == videoId) items
+
+-- | Remove video from playlist by video ID (looks up item ID automatically)
+removeVideoByVideoId :: TokenResponse -> T.Text -> T.Text -> IO Bool
+removeVideoByVideoId token playlistId videoId = do
+  mbItemId <- findItemIdByVideoId token playlistId videoId
+  case mbItemId of
+    Nothing -> do
+      putStrLn $ "Video not found in playlist: " ++ T.unpack videoId
+      return False
+    Just itemId -> removeVideo token itemId
+
+-- | Add multiple videos to playlist from a list
+addVideos :: TokenResponse -> T.Text -> [T.Text] -> IO (Int, Int)
+addVideos token playlistId videoIds = go videoIds 0 0
+  where
+    go [] success failed = return (success, failed)
+    go (vid:rest) success failed = do
+      putStrLn $ "Adding: " ++ T.unpack vid
+      result <- addVideo token playlistId vid
+      if result
+        then do
+          putStrLn $ "  ✓ Added " ++ T.unpack vid
+          go rest (success + 1) failed
+        else do
+          putStrLn $ "  ✗ Failed to add " ++ T.unpack vid
+          go rest success (failed + 1)
+
+-- | Remove multiple videos from playlist by video ID
+removeVideosByVideoId :: TokenResponse -> T.Text -> [T.Text] -> IO (Int, Int)
+removeVideosByVideoId token playlistId videoIds = go videoIds 0 0
+  where
+    go [] success failed = return (success, failed)
+    go (vid:rest) success failed = do
+      putStrLn $ "Removing: " ++ T.unpack vid
+      result <- removeVideoByVideoId token playlistId vid
+      if result
+        then do
+          putStrLn $ "  ✓ Removed " ++ T.unpack vid
+          go rest (success + 1) failed
+        else do
+          putStrLn $ "  ✗ Failed to remove " ++ T.unpack vid
+          go rest success (failed + 1)
+
+-- | Move videos from one playlist to another
+moveVideos :: TokenResponse -> T.Text -> T.Text -> [T.Text] -> IO (Int, Int, Int)
+moveVideos token sourcePlaylist targetPlaylist videoIds = go videoIds 0 0 0
+  where
+    go [] added removed failed = return (added, removed, failed)
+    go (vid:rest) added removed failed = do
+      putStrLn $ "Moving: " ++ T.unpack vid
+      -- Add to target
+      addResult <- addVideo token targetPlaylist vid
+      if addResult
+        then do
+          -- Remove from source
+          removeResult <- removeVideoByVideoId token sourcePlaylist vid
+          if removeResult
+            then do
+              putStrLn $ "  ✓ Moved " ++ T.unpack vid
+              go rest (added + 1) (removed + 1) failed
+            else do
+              putStrLn $ "  ⚠ Added to target but failed to remove from source: " ++ T.unpack vid
+              go rest (added + 1) removed (failed + 1)
+        else do
+          putStrLn $ "  ✗ Failed to add " ++ T.unpack vid
+          go rest added removed (failed + 1)
+
 -- =============================================================================
 -- Main Program
 -- =============================================================================
@@ -584,6 +657,53 @@ main = do
 
     ["delete-playlist"] -> do
       putStrLn "Usage: ytplaylist delete-playlist <playlist-id>"
+      exitFailure
+
+    -- Batch operations
+    ["add-videos", playlistId, filePath] -> do
+      secrets <- loadClientSecrets
+      token <- getOrRefreshToken (installed secrets)
+      content <- readFile filePath
+      let videoIds = map T.pack $ filter (not . null) $ lines content
+      putStrLn $ "Adding " ++ show (length videoIds) ++ " videos to playlist..."
+      (success, failed) <- addVideos token (T.pack playlistId) videoIds
+      putStrLn $ "\nDone! Added: " ++ show success ++ ", Failed: " ++ show failed
+      exitSuccess
+
+    ["add-videos", _] -> do
+      putStrLn "Usage: ytplaylist add-videos <playlist-id> <file>"
+      putStrLn "File should contain one video ID per line"
+      exitFailure
+
+    ["remove-videos", playlistId, filePath] -> do
+      secrets <- loadClientSecrets
+      token <- getOrRefreshToken (installed secrets)
+      content <- readFile filePath
+      let videoIds = map T.pack $ filter (not . null) $ lines content
+      putStrLn $ "Removing " ++ show (length videoIds) ++ " videos from playlist..."
+      (success, failed) <- removeVideosByVideoId token (T.pack playlistId) videoIds
+      putStrLn $ "\nDone! Removed: " ++ show success ++ ", Failed: " ++ show failed
+      exitSuccess
+
+    ["remove-videos", _] -> do
+      putStrLn "Usage: ytplaylist remove-videos <playlist-id> <file>"
+      putStrLn "File should contain one video ID per line"
+      putStrLn "Videos are looked up by ID and removed from the playlist"
+      exitFailure
+
+    ["move-videos", sourcePlaylist, targetPlaylist, filePath] -> do
+      secrets <- loadClientSecrets
+      token <- getOrRefreshToken (installed secrets)
+      content <- readFile filePath
+      let videoIds = map T.pack $ filter (not . null) $ lines content
+      putStrLn $ "Moving " ++ show (length videoIds) ++ " videos..."
+      (added, removed, failed) <- moveVideos token (T.pack sourcePlaylist) (T.pack targetPlaylist) videoIds
+      putStrLn $ "\nDone! Added to target: " ++ show added ++ ", Removed from source: " ++ show removed ++ ", Failed: " ++ show failed
+      exitSuccess
+
+    ["move-videos", _] -> do
+      putStrLn "Usage: ytplaylist move-videos <source-playlist-id> <target-playlist-id> <file>"
+      putStrLn "File should contain one video ID per line"
       exitFailure
 
     [] -> interactiveMode
@@ -744,10 +864,16 @@ printUsage = do
   putStrLn "  auth                              Authenticate with YouTube"
   putStrLn "  list-playlists                    List all your playlists"
   putStrLn "  list <playlist-id>                List all videos in a playlist"
-  putStrLn "  remove <playlist-item-id>         Remove video from playlist"
+  putStrLn "  remove <playlist-item-id>         Remove video from playlist (by item ID)"
   putStrLn "  create-playlist                   Create a new playlist (interactive)"
   putStrLn "  add-video <playlist-id> <vid>     Add video to playlist"
   putStrLn "  delete-playlist <playlist-id>     Delete a playlist"
+  putStrLn ""
+  putStrLn "Batch Operations:"
+  putStrLn "  add-videos <playlist> <file>      Add multiple videos from file (1 ID/line)"
+  putStrLn "  remove-videos <playlist> <file>   Remove videos by video ID (looks up item ID)"
+  putStrLn "  move-videos <src> <dst> <file>    Move videos between playlists"
+  putStrLn ""
   putStrLn "  (no command)                      Interactive mode"
   putStrLn "  --help, -h, help                  Show this help"
   putStrLn ""
@@ -760,3 +886,6 @@ printUsage = do
   putStrLn "  ytplaylist list-playlists                    # Show all playlists"
   putStrLn "  ytplaylist list PLxxxxxxxxxxx                # List videos"
   putStrLn "  ytplaylist remove PLxxxxxxxxxxx.xxxxxxxxxxx  # Remove video"
+  putStrLn "  ytplaylist add-videos PLxxx videos.txt       # Batch add"
+  putStrLn "  ytplaylist remove-videos PLxxx videos.txt    # Batch remove by video ID"
+  putStrLn "  ytplaylist move-videos PLsrc PLdst vids.txt  # Batch move"
