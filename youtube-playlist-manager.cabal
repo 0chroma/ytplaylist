@@ -14,7 +14,8 @@ executable ytplaylist
                      , aeson-pretty
                      , bytestring
                      , text
-                     , http-conduit
+                     , http-client
+                     , http-client-tls
                      , http-types
                      , directory
                      , filepath

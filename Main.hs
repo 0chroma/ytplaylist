@@ -8,13 +8,15 @@ module Main where
 
 import Data.Aeson
 import Data.Aeson.Encode.Pretty (encodePretty)
+import Data.Text.Encoding (encodeUtf8)
 import GHC.Generics
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
-import Network.HTTP.Conduit
-import Network.HTTP.Types (methodPost, methodDelete, status200, status204)
+import Network.HTTP.Client
+import Network.HTTP.Client.TLS (tlsManagerSettings)
+import Network.HTTP.Types (methodPost, methodDelete, status200, status204, hAuthorization, hContentType)
 import System.Environment (getArgs)
 import System.Directory (doesFileExist)
 import System.Exit (exitFailure, exitSuccess)
@@ -24,7 +26,7 @@ import Control.Exception (try, SomeException)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.List (find)
 import System.Process (proc, createProcess, waitForProcess, std_out, std_err, StdStream(..))
-import qualified Data.ByteString.Lazy.Char8 as BL8
+
 
 -- =============================================================================
 -- Types
@@ -258,7 +260,7 @@ refreshAccessToken config rt = do
   let request' = request
         { method = methodPost
         , requestBody = RequestBodyBS $ BS8.pack reqBody
-        , requestHeaders = [("Content-Type", "application/x-www-form-urlencoded")]
+        , requestHeaders = [(hContentType, "application/x-www-form-urlencoded")]
         }
   manager <- newManager tlsManagerSettings
   response <- httpLbs request' manager
@@ -304,7 +306,7 @@ authenticateInteractive config = do
   let request' = request
         { method = methodPost
         , requestBody = RequestBodyBS $ BS8.pack reqBody
-        , requestHeaders = [("Content-Type", "application/x-www-form-urlencoded")]
+        , requestHeaders = [(hContentType, "application/x-www-form-urlencoded")]
         }
   manager <- newManager tlsManagerSettings
   response <- httpLbs request' manager
@@ -356,6 +358,49 @@ escapeURIComponent = concatMap encodeChar
                              else toEnum (d - 10 + fromEnum 'A')
 
 -- =============================================================================
+-- HTTP Helpers (using http-client)
+-- =============================================================================
+
+-- | Authorization header value
+authHeader :: TokenResponse -> BS8.ByteString
+authHeader token = "Bearer " <> encodeUtf8 (access_token token)
+
+-- | Make an authenticated GET request and parse JSON response
+getJSON :: (FromJSON a) => TokenResponse -> String -> IO (Either String a)
+getJSON token urlStr = do
+  manager <- newManager tlsManagerSettings
+  request <- parseRequest urlStr
+  let request' = request { requestHeaders = [(hAuthorization, authHeader token)] }
+  response <- httpLbs request' manager
+  if responseStatus response == status200
+    then return $ eitherDecode (responseBody response)
+    else return $ Left $ "HTTP " ++ show (responseStatus response)
+
+-- | Make an authenticated POST request with JSON body
+postJSON :: (ToJSON a, FromJSON b) => TokenResponse -> String -> a -> IO (Either String b)
+postJSON token urlStr body = do
+  manager <- newManager tlsManagerSettings
+  request <- parseRequest urlStr
+  let request' = request
+        { method = methodPost
+        , requestBody = RequestBodyLBS $ encode body
+        , requestHeaders = [(hAuthorization, authHeader token), (hContentType, "application/json")]
+        }
+  response <- httpLbs request' manager
+  if responseStatus response == status200
+    then return $ eitherDecode (responseBody response)
+    else return $ Left $ "HTTP " ++ show (responseStatus response)
+
+-- | Make an authenticated DELETE request
+deleteRequest :: TokenResponse -> String -> IO Bool
+deleteRequest token urlStr = do
+  manager <- newManager tlsManagerSettings
+  request <- parseRequest urlStr
+  let request' = request { method = methodDelete, requestHeaders = [(hAuthorization, authHeader token)] }
+  response <- httpLbs request' manager
+  return $ responseStatus response == status204
+
+-- =============================================================================
 -- API Functions
 -- =============================================================================
 
@@ -363,22 +408,14 @@ escapeURIComponent = concatMap encodeChar
 listPlaylists :: TokenResponse -> IO ()
 listPlaylists token = do
   let url = baseUrl ++ "/playlists?part=snippet,contentDetails&mine=true&maxResults=50"
-  request <- parseRequest url
-  let request' = request
-        { requestHeaders = [("Authorization", BS8.pack $ "Bearer " ++ T.unpack (access_token token))]
-        }
-  manager <- newManager tlsManagerSettings
-  response <- httpLbs request' manager
-  if responseStatus response == status200
-    then case eitherDecode (responseBody response) :: Either String PlaylistsResponse of
-      Left err -> putStrLn $ "Parse error: " ++ err
-      Right resp -> do
-        putStrLn "\n=== Your Playlists ===\n"
-        mapM_ printPlaylist (pr_items resp)
-        putStrLn $ "\nTotal: " ++ show (length $ pr_items resp) ++ " playlists"
-    else do
-      putStrLn $ "API error: " ++ show (responseStatus response)
-      putStrLn $ BL8.unpack (responseBody response)
+  result <- getJSON token url :: IO (Either String PlaylistsResponse)
+  case result of
+    Left err -> do
+      putStrLn $ "Error: " ++ err
+    Right resp -> do
+      putStrLn "\n=== Your Playlists ===\n"
+      mapM_ printPlaylist (pr_items resp)
+      putStrLn $ "\nTotal: " ++ show (length $ pr_items resp) ++ " playlists"
   where
     printPlaylist pl = do
       putStrLn $ T.unpack (plsi_title $ pli_snippet pl)
@@ -393,24 +430,17 @@ fetchPlaylistItems token playlistId = fetchPages Nothing
     fetchPages :: Maybe T.Text -> IO [PlaylistItem]
     fetchPages pageToken = do
       let base = baseUrl ++ "/playlistItems?part=snippet&playlistId=" ++ T.unpack playlistId ++ "&maxResults=50"
-      let url = case pageToken of
+          url = case pageToken of
                   Nothing -> base
                   Just tok -> base ++ "&pageToken=" ++ escapeURIComponent (T.unpack tok)
-      request <- parseRequest url
-      let request' = request
-            { requestHeaders = [("Authorization", BS8.pack $ "Bearer " ++ T.unpack (access_token token))]
-            }
-      manager <- newManager tlsManagerSettings
-      response <- httpLbs request' manager
-      if responseStatus response == status200
-        then case eitherDecode (responseBody response) :: Either String PlaylistItemsResponse of
-          Left _ -> return []
-          Right resp -> do
-            rest <- case pir_nextPageToken resp of
-              Nothing -> return []
-              Just nextTok -> fetchPages (Just nextTok)
-            return $ pir_items resp ++ rest
-        else return []
+      result <- getJSON token url :: IO (Either String PlaylistItemsResponse)
+      case result of
+        Left _ -> return []
+        Right resp -> do
+          rest <- case pir_nextPageToken resp of
+            Nothing -> return []
+            Just nextTok -> fetchPages (Just nextTok)
+          return $ pir_items resp ++ rest
 
 -- | List all videos in a playlist
 listPlaylistVideos :: TokenResponse -> T.Text -> IO ()
@@ -435,77 +465,39 @@ listPlaylistVideos token playlistId = do
 
 -- | Remove a video from playlist (by playlist item ID)
 removeVideo :: TokenResponse -> T.Text -> IO Bool
-removeVideo token itemId = do
-  let url = baseUrl ++ "/playlistItems?id=" ++ T.unpack itemId
-  request <- parseRequest url
-  let request' = request
-        { method = methodDelete
-        , requestHeaders = [("Authorization", BS8.pack $ "Bearer " ++ T.unpack (access_token token))]
-        }
-  manager <- newManager tlsManagerSettings
-  response <- httpLbs request' manager
-  return $ responseStatus response == status204
+removeVideo token itemId =
+  deleteRequest token $ baseUrl ++ "/playlistItems?id=" ++ T.unpack itemId
 
 -- | Create a new playlist
 createPlaylist :: TokenResponse -> T.Text -> T.Text -> T.Text -> IO (Maybe T.Text)
 createPlaylist token title description privacy = do
   let url = baseUrl ++ "/playlists?part=snippet,status"
-  let reqBody = CreatePlaylistRequest
+      reqBody = CreatePlaylistRequest
         { cpr_snippet = CreatePlaylistSnippet title description
         , cpr_status = CreatePlaylistStatus privacy
         }
-  request <- parseRequest url
-  let request' = request
-        { method = methodPost
-        , requestBody = RequestBodyLBS $ encode reqBody
-        , requestHeaders =
-            [ ("Authorization", BS8.pack $ "Bearer " ++ T.unpack (access_token token))
-            , ("Content-Type", "application/json")
-            ]
-        }
-  manager <- newManager tlsManagerSettings
-  response <- httpLbs request' manager
-  if responseStatus response == status200
-    then case eitherDecode $ responseBody response :: Either String CreatePlaylistResponse of
-      Left _ -> return Nothing
-      Right resp -> return $ Just (cpr_id resp)
-    else return Nothing
+  result <- postJSON token url reqBody :: IO (Either String CreatePlaylistResponse)
+  case result of
+    Left _ -> return Nothing
+    Right resp -> return $ Just (cpr_id resp)
 
 -- | Add video to playlist
 addVideo :: TokenResponse -> T.Text -> T.Text -> IO Bool
 addVideo token playlistId videoId = do
   let url = baseUrl ++ "/playlistItems?part=snippet"
-  let reqBody = AddVideoRequest
+      reqBody = AddVideoRequest
         { avr_snippet = AddVideoSnippet
             { avs_playlistId = playlistId
             , avs_resourceId = AddVideoResourceId "youtube#video" videoId
             }
         }
-  request <- parseRequest url
-  let request' = request
-        { method = methodPost
-        , requestBody = RequestBodyLBS $ encode reqBody
-        , requestHeaders =
-            [ ("Authorization", BS8.pack $ "Bearer " ++ T.unpack (access_token token))
-            , ("Content-Type", "application/json")
-            ]
-        }
-  manager <- newManager tlsManagerSettings
-  response <- httpLbs request' manager
-  return $ responseStatus response == status200
+  result <- postJSON token url reqBody :: IO (Either String Value)
+  return $ case result of Left _ -> False; Right _ -> True
 
 -- | Delete a playlist
 deletePlaylist :: TokenResponse -> T.Text -> IO Bool
-deletePlaylist token playlistId = do
-  let url = baseUrl ++ "/playlists?id=" ++ T.unpack playlistId
-  request <- parseRequest url
-  let request' = request
-        { method = methodDelete
-        , requestHeaders = [("Authorization", BS8.pack $ "Bearer " ++ T.unpack (access_token token))]
-        }
-  manager <- newManager tlsManagerSettings
-  response <- httpLbs request' manager
-  return $ responseStatus response == status204
+deletePlaylist token playlistId =
+  deleteRequest token $ baseUrl ++ "/playlists?id=" ++ T.unpack playlistId
 
 -- | Find playlist item ID by video ID
 findItemIdByVideoId :: TokenResponse -> T.Text -> T.Text -> IO (Maybe T.Text)
