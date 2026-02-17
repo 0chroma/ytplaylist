@@ -20,7 +20,7 @@ import Network.HTTP.Types (methodPost, methodDelete, status200, status204, hAuth
 import System.Environment (getArgs)
 import System.Directory (doesFileExist)
 import System.Exit (exitFailure, exitSuccess)
-import System.IO (hFlush, stdout)
+import System.IO (hFlush, stdout, stderr, hSetBuffering, BufferMode(..))
 
 import Control.Exception (try, SomeException)
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -519,9 +519,10 @@ removeVideoByVideoId token playlistId videoId = do
 addVideos :: TokenResponse -> T.Text -> [T.Text] -> IO (Int, Int)
 addVideos token playlistId videoIds = go videoIds 0 0
   where
+    total = length videoIds
     go [] success failed = return (success, failed)
     go (vid:rest) success failed = do
-      putStrLn $ "Adding: " ++ T.unpack vid
+      putStrLn $ "Adding (" ++ show (success + failed + 1) ++ "/" ++ show total ++ "): " ++ T.unpack vid
       result <- addVideo token playlistId vid
       if result
         then do
@@ -535,9 +536,10 @@ addVideos token playlistId videoIds = go videoIds 0 0
 removeVideosByVideoId :: TokenResponse -> T.Text -> [T.Text] -> IO (Int, Int)
 removeVideosByVideoId token playlistId videoIds = go videoIds 0 0
   where
+    total = length videoIds
     go [] success failed = return (success, failed)
     go (vid:rest) success failed = do
-      putStrLn $ "Removing: " ++ T.unpack vid
+      putStrLn $ "Removing (" ++ show (success + failed + 1) ++ "/" ++ show total ++ "): " ++ T.unpack vid
       result <- removeVideoByVideoId token playlistId vid
       if result
         then do
@@ -551,9 +553,10 @@ removeVideosByVideoId token playlistId videoIds = go videoIds 0 0
 moveVideos :: TokenResponse -> T.Text -> T.Text -> [T.Text] -> IO (Int, Int, Int)
 moveVideos token sourcePlaylist targetPlaylist videoIds = go videoIds 0 0 0
   where
+    total = length videoIds
     go [] added removed failed = return (added, removed, failed)
     go (vid:rest) added removed failed = do
-      putStrLn $ "Moving: " ++ T.unpack vid
+      putStrLn $ "Moving (" ++ show (added + removed + failed + 1) ++ "/" ++ show total ++ "): " ++ T.unpack vid
       -- Add to target
       addResult <- addVideo token targetPlaylist vid
       if addResult
@@ -577,6 +580,8 @@ moveVideos token sourcePlaylist targetPlaylist videoIds = go videoIds 0 0 0
 
 main :: IO ()
 main = do
+  hSetBuffering stdout LineBuffering
+  hSetBuffering stderr LineBuffering
   args <- getArgs
 
   case args of
@@ -623,6 +628,33 @@ main = do
       exitFailure
 
     ["create-playlist"] -> interactiveCreatePlaylist
+
+    ["create-playlist", title] -> do
+      secrets <- loadClientSecrets
+      token <- getOrRefreshToken (installed secrets)
+      mbId <- createPlaylist token (T.pack title) "" "private"
+      case mbId of
+        Just pid -> putStrLn $ T.unpack pid
+        Nothing -> putStrLn "Failed to create playlist"
+      exitSuccess
+
+    ["create-playlist", title, privacy] -> do
+      secrets <- loadClientSecrets
+      token <- getOrRefreshToken (installed secrets)
+      mbId <- createPlaylist token (T.pack title) "" (T.pack privacy)
+      case mbId of
+        Just pid -> putStrLn $ T.unpack pid
+        Nothing -> putStrLn "Failed to create playlist"
+      exitSuccess
+
+    ["create-playlist", title, description, privacy] -> do
+      secrets <- loadClientSecrets
+      token <- getOrRefreshToken (installed secrets)
+      mbId <- createPlaylist token (T.pack title) (T.pack description) (T.pack privacy)
+      case mbId of
+        Just pid -> putStrLn $ T.unpack pid
+        Nothing -> putStrLn "Failed to create playlist"
+      exitSuccess
 
     ["add-video", playlistId, videoId] -> do
       secrets <- loadClientSecrets
@@ -858,6 +890,8 @@ printUsage = do
   putStrLn "  list <playlist-id>                List all videos in a playlist"
   putStrLn "  remove <playlist-item-id>         Remove video from playlist (by item ID)"
   putStrLn "  create-playlist                   Create a new playlist (interactive)"
+  putStrLn "  create-playlist <title>           Create playlist (private, no description)"
+  putStrLn "  create-playlist <title> <privacy> Create playlist with privacy setting"
   putStrLn "  add-video <playlist-id> <vid>     Add video to playlist"
   putStrLn "  delete-playlist <playlist-id>     Delete a playlist"
   putStrLn ""
