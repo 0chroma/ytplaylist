@@ -10,7 +10,6 @@ import System.Exit (exitFailure, exitSuccess)
 import System.IO (hFlush, stdout, stderr, hSetBuffering, BufferMode(..))
 import Control.Exception (try, SomeException)
 
-import Types
 import OAuth
 import YouTube
 
@@ -31,20 +30,20 @@ main = do
 
     ["auth"] -> do
       putStrLn "Authenticating with YouTube..."
-      secrets <- loadClientSecrets
-      _ <- authenticateInteractive (installed secrets)
+      oauth2 <- loadClientSecrets
+      _ <- authenticateInteractive oauth2
       putStrLn "Authentication successful!"
       exitSuccess
 
     ["list-playlists"] -> do
-      secrets <- loadClientSecrets
-      token <- getOrRefreshToken (installed secrets)
+      oauth2 <- loadClientSecrets
+      token <- getOrRefreshToken oauth2
       listPlaylists token
       exitSuccess
 
     ["list", playlistId] -> do
-      secrets <- loadClientSecrets
-      token <- getOrRefreshToken (installed secrets)
+      oauth2 <- loadClientSecrets
+      token <- getOrRefreshToken oauth2
       listPlaylistVideos token (T.pack playlistId)
       exitSuccess
 
@@ -54,8 +53,8 @@ main = do
       exitFailure
 
     ["remove", itemId] -> do
-      secrets <- loadClientSecrets
-      token <- getOrRefreshToken (installed secrets)
+      oauth2 <- loadClientSecrets
+      token <- getOrRefreshToken oauth2
       success <- removeVideo token (T.pack itemId)
       if success
         then putStrLn $ "Removed: " ++ itemId
@@ -70,8 +69,8 @@ main = do
     ["create-playlist"] -> interactiveCreatePlaylist
 
     ["create-playlist", title] -> do
-      secrets <- loadClientSecrets
-      token <- getOrRefreshToken (installed secrets)
+      oauth2 <- loadClientSecrets
+      token <- getOrRefreshToken oauth2
       mbId <- createPlaylist token (T.pack title) "" "private"
       case mbId of
         Just pid -> putStrLn $ T.unpack pid
@@ -79,8 +78,8 @@ main = do
       exitSuccess
 
     ["create-playlist", title, privacy] -> do
-      secrets <- loadClientSecrets
-      token <- getOrRefreshToken (installed secrets)
+      oauth2 <- loadClientSecrets
+      token <- getOrRefreshToken oauth2
       mbId <- createPlaylist token (T.pack title) "" (T.pack privacy)
       case mbId of
         Just pid -> putStrLn $ T.unpack pid
@@ -88,8 +87,8 @@ main = do
       exitSuccess
 
     ["create-playlist", title, description, privacy] -> do
-      secrets <- loadClientSecrets
-      token <- getOrRefreshToken (installed secrets)
+      oauth2 <- loadClientSecrets
+      token <- getOrRefreshToken oauth2
       mbId <- createPlaylist token (T.pack title) (T.pack description) (T.pack privacy)
       case mbId of
         Just pid -> putStrLn $ T.unpack pid
@@ -97,8 +96,8 @@ main = do
       exitSuccess
 
     ["add-video", playlistId, videoId] -> do
-      secrets <- loadClientSecrets
-      token <- getOrRefreshToken (installed secrets)
+      oauth2 <- loadClientSecrets
+      token <- getOrRefreshToken oauth2
       success <- addVideo token (T.pack playlistId) (T.pack videoId)
       if success
         then putStrLn $ "Added video " ++ videoId ++ " to playlist"
@@ -111,8 +110,8 @@ main = do
       exitFailure
 
     ["delete-playlist", playlistId] -> do
-      secrets <- loadClientSecrets
-      token <- getOrRefreshToken (installed secrets)
+      oauth2 <- loadClientSecrets
+      token <- getOrRefreshToken oauth2
       success <- deletePlaylist token (T.pack playlistId)
       if success
         then putStrLn $ "Deleted playlist: " ++ playlistId
@@ -125,8 +124,8 @@ main = do
 
     -- Batch operations
     ["add-videos", playlistId, filePath] -> do
-      secrets <- loadClientSecrets
-      token <- getOrRefreshToken (installed secrets)
+      oauth2 <- loadClientSecrets
+      token <- getOrRefreshToken oauth2
       content <- readFile filePath
       let videoIds = map T.pack $ filter (not . null) $ lines content
       putStrLn $ "Adding " ++ show (length videoIds) ++ " videos to playlist..."
@@ -140,8 +139,8 @@ main = do
       exitFailure
 
     ["remove-videos", playlistId, filePath] -> do
-      secrets <- loadClientSecrets
-      token <- getOrRefreshToken (installed secrets)
+      oauth2 <- loadClientSecrets
+      token <- getOrRefreshToken oauth2
       content <- readFile filePath
       let videoIds = map T.pack $ filter (not . null) $ lines content
       putStrLn $ "Removing " ++ show (length videoIds) ++ " videos from playlist..."
@@ -156,8 +155,8 @@ main = do
       exitFailure
 
     ["move-videos", sourcePlaylist, targetPlaylist, filePath] -> do
-      secrets <- loadClientSecrets
-      token <- getOrRefreshToken (installed secrets)
+      oauth2 <- loadClientSecrets
+      token <- getOrRefreshToken oauth2
       content <- readFile filePath
       let videoIds = map T.pack $ filter (not . null) $ lines content
       putStrLn $ "Moving " ++ show (length videoIds) ++ " videos..."
@@ -176,8 +175,8 @@ main = do
 
 interactiveCreatePlaylist :: IO ()
 interactiveCreatePlaylist = do
-  secrets <- loadClientSecrets
-  token <- getOrRefreshToken (installed secrets)
+  oauth2 <- loadClientSecrets
+  token <- getOrRefreshToken oauth2
   putStr "Playlist title: "
   hFlush stdout
   title <- T.getLine
@@ -225,8 +224,8 @@ interactiveMode = do
 cmdListPlaylists :: IO ()
 cmdListPlaylists = do
   result <- try @SomeException $ do
-    secrets <- loadClientSecrets
-    token <- getOrRefreshToken (installed secrets)
+    oauth2 <- loadClientSecrets
+    token <- getOrRefreshToken oauth2
     listPlaylists token
   case result of
     Left e -> putStrLn $ "Error: " ++ show e
@@ -238,8 +237,8 @@ cmdListVideos = do
   hFlush stdout
   pid <- T.getLine
   result <- try @SomeException $ do
-    secrets <- loadClientSecrets
-    token <- getOrRefreshToken (installed secrets)
+    oauth2 <- loadClientSecrets
+    token <- getOrRefreshToken oauth2
     listPlaylistVideos token pid
   case result of
     Left e -> putStrLn $ "Error: " ++ show e
@@ -251,8 +250,8 @@ cmdRemoveVideo = do
   hFlush stdout
   itemId <- T.getLine
   result <- try @SomeException $ do
-    secrets <- loadClientSecrets
-    token <- getOrRefreshToken (installed secrets)
+    oauth2 <- loadClientSecrets
+    token <- getOrRefreshToken oauth2
     success <- removeVideo token itemId
     putStrLn $ if success then "Removed successfully" else "Failed to remove"
   case result of
@@ -271,8 +270,8 @@ cmdCreatePlaylist = do
   hFlush stdout
   privacy <- T.getLine
   result <- try @SomeException $ do
-    secrets <- loadClientSecrets
-    token <- getOrRefreshToken (installed secrets)
+    oauth2 <- loadClientSecrets
+    token <- getOrRefreshToken oauth2
     mbId <- createPlaylist token title desc privacy
     case mbId of
       Just pid -> putStrLn $ "Created: " ++ T.unpack pid
@@ -290,8 +289,8 @@ cmdAddVideo = do
   hFlush stdout
   vid <- T.getLine
   result <- try @SomeException $ do
-    secrets <- loadClientSecrets
-    token <- getOrRefreshToken (installed secrets)
+    oauth2 <- loadClientSecrets
+    token <- getOrRefreshToken oauth2
     success <- addVideo token pid vid
     putStrLn $ if success then "Added successfully" else "Failed to add"
   case result of
@@ -310,8 +309,8 @@ cmdDeletePlaylist = do
     then putStrLn "Cancelled"
     else do
       result <- try @SomeException $ do
-        secrets <- loadClientSecrets
-        token <- getOrRefreshToken (installed secrets)
+        oauth2 <- loadClientSecrets
+        token <- getOrRefreshToken oauth2
         success <- deletePlaylist token pid
         putStrLn $ if success then "Deleted successfully" else "Failed to delete"
       case result of

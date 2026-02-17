@@ -4,8 +4,6 @@ module HTTP
   ( -- Configuration
     baseUrl
   , batchUrl
-    -- Auth header
-  , authHeader
     -- HTTP helpers
   , getJSON
   , postJSON
@@ -17,16 +15,17 @@ module HTTP
   ) where
 
 import Data.Aeson (FromJSON, ToJSON, eitherDecode, encode)
-import Data.Text.Encoding (encodeUtf8)
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.Text as T
+import Data.Text.Encoding (encodeUtf8)
 import Network.HTTP.Client
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types (methodPost, methodDelete, status200, status204, hAuthorization, hContentType)
 import Data.List (isInfixOf)
 import qualified Network.URI.Encode as URI
 
+import Network.OAuth.OAuth2 (AccessToken(..))
 import Types
 
 -- =============================================================================
@@ -43,10 +42,10 @@ batchUrl = "https://www.googleapis.com/batch/youtube/v3"
 -- HTTP Helpers
 -- =============================================================================
 
-authHeader :: TokenResponse -> BS8.ByteString
-authHeader token = "Bearer " <> encodeUtf8 (access_token token)
+authHeader :: AccessToken -> BS8.ByteString
+authHeader (AccessToken token) = "Bearer " <> encodeUtf8 token
 
-getJSON :: (FromJSON a) => TokenResponse -> String -> IO (Either String a)
+getJSON :: (FromJSON a) => AccessToken -> String -> IO (Either String a)
 getJSON token urlStr = do
   manager <- newManager tlsManagerSettings
   request <- parseRequest urlStr
@@ -56,7 +55,7 @@ getJSON token urlStr = do
     then return $ eitherDecode (responseBody response)
     else return $ Left $ "HTTP " ++ show (responseStatus response)
 
-postJSON :: (ToJSON a, FromJSON b) => TokenResponse -> String -> a -> IO (Either String b)
+postJSON :: (ToJSON a, FromJSON b) => AccessToken -> String -> a -> IO (Either String b)
 postJSON token urlStr body = do
   manager <- newManager tlsManagerSettings
   request <- parseRequest urlStr
@@ -70,7 +69,7 @@ postJSON token urlStr body = do
     then return $ eitherDecode (responseBody response)
     else return $ Left $ "HTTP " ++ show (responseStatus response)
 
-deleteRequest :: TokenResponse -> String -> IO Bool
+deleteRequest :: AccessToken -> String -> IO Bool
 deleteRequest token urlStr = do
   manager <- newManager tlsManagerSettings
   request <- parseRequest urlStr
@@ -97,7 +96,7 @@ buildBatchBody boundary parts = BS8.concat $
   , BS8.pack $ "\r\n--" ++ boundary ++ "--"
   ]
 
-batchRequest :: TokenResponse -> [BS8.ByteString] -> IO [Bool]
+batchRequest :: AccessToken -> [BS8.ByteString] -> IO [Bool]
 batchRequest token subRequests = do
   let boundary = "batch_" ++ take 16 (filter (`elem` (['a'..'z'] ++ ['0'..'9'])) $ show $ hashBoundary subRequests)
       body = buildBatchBody boundary subRequests

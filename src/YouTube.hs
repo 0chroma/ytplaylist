@@ -28,6 +28,7 @@ import Data.Function (on)
 import qualified Data.Map.Strict as Map
 import qualified Network.URI.Encode as URI
 
+import Network.OAuth.OAuth2 (AccessToken(..), OAuth2Token(..))
 import Types
 import HTTP
 
@@ -35,10 +36,10 @@ import HTTP
 -- Playlist Operations
 -- =============================================================================
 
-listPlaylists :: TokenResponse -> IO ()
+listPlaylists :: OAuth2Token -> IO ()
 listPlaylists token = do
   let url = baseUrl ++ "/playlists?part=snippet,contentDetails&mine=true&maxResults=50"
-  result <- getJSON token url :: IO (Either String PlaylistsResponse)
+  result <- getJSON (accessToken token) url :: IO (Either String PlaylistsResponse)
   case result of
     Left err -> do
       putStrLn $ "Error: " ++ err
@@ -53,27 +54,27 @@ listPlaylists token = do
       putStrLn $ "  Videos: " ++ show (plcd_itemCount $ pli_contentDetails pl)
       putStrLn ""
 
-createPlaylist :: TokenResponse -> T.Text -> T.Text -> T.Text -> IO (Maybe T.Text)
+createPlaylist :: OAuth2Token -> T.Text -> T.Text -> T.Text -> IO (Maybe T.Text)
 createPlaylist token title description privacy = do
   let url = baseUrl ++ "/playlists?part=snippet,status"
       reqBody = CreatePlaylistRequest
         { cpr_snippet = CreatePlaylistSnippet title description
         , cpr_status = CreatePlaylistStatus privacy
         }
-  result <- postJSON token url reqBody :: IO (Either String CreatePlaylistResponse)
+  result <- postJSON (accessToken token) url reqBody :: IO (Either String CreatePlaylistResponse)
   case result of
     Left _ -> return Nothing
     Right resp -> return $ Just (cpr_id resp)
 
-deletePlaylist :: TokenResponse -> T.Text -> IO Bool
+deletePlaylist :: OAuth2Token -> T.Text -> IO Bool
 deletePlaylist token playlistId =
-  deleteRequest token $ baseUrl ++ "/playlists?id=" ++ T.unpack playlistId
+  deleteRequest (accessToken token) $ baseUrl ++ "/playlists?id=" ++ T.unpack playlistId
 
 -- =============================================================================
 -- Playlist Item Operations
 -- =============================================================================
 
-fetchPlaylistItems :: TokenResponse -> T.Text -> IO [PlaylistItem]
+fetchPlaylistItems :: OAuth2Token -> T.Text -> IO [PlaylistItem]
 fetchPlaylistItems token playlistId = fetchPages Nothing
   where
     fetchPages pageToken = do
@@ -81,7 +82,7 @@ fetchPlaylistItems token playlistId = fetchPages Nothing
           url = case pageToken of
                   Nothing -> base
                   Just tok -> base ++ "&pageToken=" ++ URI.encode (T.unpack tok)
-      result <- getJSON token url :: IO (Either String PlaylistItemsResponse)
+      result <- getJSON (accessToken token) url :: IO (Either String PlaylistItemsResponse)
       case result of
         Left _ -> return []
         Right resp -> do
@@ -90,7 +91,7 @@ fetchPlaylistItems token playlistId = fetchPages Nothing
             Just nextTok -> fetchPages (Just nextTok)
           return $ pir_items resp ++ rest
 
-listPlaylistVideos :: TokenResponse -> T.Text -> IO ()
+listPlaylistVideos :: OAuth2Token -> T.Text -> IO ()
 listPlaylistVideos token playlistId = do
   items <- fetchPlaylistItems token playlistId
   putStrLn $ "\n=== Playlist Videos ==="
@@ -110,7 +111,7 @@ listPlaylistVideos token playlistId = do
     padR n s = s ++ replicate (max 0 (n - length s)) ' '
     trunc n s = if length s > n then take (n-3) s ++ "..." else s
 
-addVideo :: TokenResponse -> T.Text -> T.Text -> IO Bool
+addVideo :: OAuth2Token -> T.Text -> T.Text -> IO Bool
 addVideo token playlistId videoId = do
   let url = baseUrl ++ "/playlistItems?part=snippet"
       reqBody = AddVideoRequest
@@ -119,10 +120,10 @@ addVideo token playlistId videoId = do
             , avs_resourceId = AddVideoResourceId "youtube#video" videoId
             }
         }
-  result <- postJSON token url reqBody :: IO (Either String Value)
+  result <- postJSON (accessToken token) url reqBody :: IO (Either String Value)
   return $ case result of Left _ -> False; Right _ -> True
 
-addVideos :: TokenResponse -> T.Text -> [T.Text] -> IO (Int, Int)
+addVideos :: OAuth2Token -> T.Text -> [T.Text] -> IO (Int, Int)
 addVideos token playlistId videoIds = do
   let total = length videoIds
       batchSize = 100
@@ -136,22 +137,22 @@ addVideos token playlistId videoIds = do
     chunksOf _ [] = []
     chunksOf n xs = take n xs : chunksOf n (drop n xs)
 
-addBatch :: TokenResponse -> T.Text -> (Int, [T.Text]) -> IO [Bool]
+addBatch :: OAuth2Token -> T.Text -> (Int, [T.Text]) -> IO [Bool]
 addBatch token playlistId (batchNum, videoIds) = do
   putStrLn $ "  Batch " ++ show batchNum ++ ": " ++ show (length videoIds) ++ " videos"
   let subRequests = map (buildAddSubRequest playlistId) videoIds
-  results <- batchRequest token subRequests
+  results <- batchRequest (accessToken token) subRequests
   mapM_ printResult (zip videoIds results)
   return results
   where
     printResult (vid, success) =
       putStrLn $ if success then "    ✓ " ++ T.unpack vid else "    ✗ " ++ T.unpack vid
 
-removeVideo :: TokenResponse -> T.Text -> IO Bool
+removeVideo :: OAuth2Token -> T.Text -> IO Bool
 removeVideo token itemId =
-  deleteRequest token $ baseUrl ++ "/playlistItems?id=" ++ T.unpack itemId
+  deleteRequest (accessToken token) $ baseUrl ++ "/playlistItems?id=" ++ T.unpack itemId
 
-removeVideosByItemId :: TokenResponse -> [PlaylistItem] -> IO [Bool]
+removeVideosByItemId :: OAuth2Token -> [PlaylistItem] -> IO [Bool]
 removeVideosByItemId token items = do
   let total = length items
       batchSize = 100
@@ -165,14 +166,14 @@ removeVideosByItemId token items = do
     removeBatch (batchNum, batchItems) = do
       putStrLn $ "  Batch " ++ show batchNum ++ ": " ++ show (length batchItems) ++ " videos"
       let subRequests = map (buildDeleteSubRequest . plitem_id) batchItems
-      results <- batchRequest token subRequests
+      results <- batchRequest (accessToken token) subRequests
       mapM_ printResult (zip batchItems results)
       return results
     printResult (item, success) = do
       let vid = res_videoId $ plitem_resourceId $ plitem_snippet item
       putStrLn $ if success then "    ✓ " ++ T.unpack vid else "    ✗ " ++ T.unpack vid
 
-removeVideosByVideoId :: TokenResponse -> T.Text -> [T.Text] -> IO (Int, Int)
+removeVideosByVideoId :: OAuth2Token -> T.Text -> [T.Text] -> IO (Int, Int)
 removeVideosByVideoId token playlistId videoIds = do
   let videoIdSet = Map.fromList $ map (, ()) videoIds
   putStrLn $ "Fetching playlist to find " ++ show (length videoIds) ++ " videos..."
@@ -184,7 +185,7 @@ removeVideosByVideoId token playlistId videoIds = do
       failed = length videoIds - success
   return (success, failed)
 
-removeVideoByVideoId :: TokenResponse -> T.Text -> T.Text -> IO Bool
+removeVideoByVideoId :: OAuth2Token -> T.Text -> T.Text -> IO Bool
 removeVideoByVideoId token playlistId videoId = do
   mbItemId <- findItemIdByVideoId token playlistId videoId
   case mbItemId of
@@ -193,7 +194,7 @@ removeVideoByVideoId token playlistId videoId = do
       return False
     Just itemId -> removeVideo token itemId
 
-moveVideos :: TokenResponse -> T.Text -> T.Text -> [T.Text] -> IO (Int, Int, Int)
+moveVideos :: OAuth2Token -> T.Text -> T.Text -> [T.Text] -> IO (Int, Int, Int)
 moveVideos token sourcePlaylist targetPlaylist videoIds = do
   let total = length videoIds
       videoIdSet = Map.fromList $ map (, ()) videoIds
@@ -219,7 +220,7 @@ moveVideos token sourcePlaylist targetPlaylist videoIds = do
 -- Lookup Helpers
 -- =============================================================================
 
-findItemIdByVideoId :: TokenResponse -> T.Text -> T.Text -> IO (Maybe T.Text)
+findItemIdByVideoId :: OAuth2Token -> T.Text -> T.Text -> IO (Maybe T.Text)
 findItemIdByVideoId token playlistId videoId = do
   items <- fetchPlaylistItems token playlistId
   return $ plitem_id <$> find (\item -> res_videoId (plitem_resourceId $ plitem_snippet item) == videoId) items

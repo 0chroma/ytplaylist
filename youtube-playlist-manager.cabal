@@ -28,6 +28,11 @@ executable ytplaylist
                      , process
                      , time
                      , uri-encode
+                     , hoauth2 >= 2.0
+                     , modern-uri
+                     , microlens
+                     , transformers
+                     , uri-bytestring
   default-language:    Haskell2010
   ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N -O2
 

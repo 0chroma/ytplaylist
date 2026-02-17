@@ -4,13 +4,8 @@
 {-# LANGUAGE DerivingStrategies #-}
 
 module Types
-  ( -- OAuth types
-    ClientSecrets(..)
-  , ClientConfig(..)
-  , TokenResponse(..)
-  , StoredToken(..)
-    -- Playlist types
-  , PlaylistsResponse(..)
+  ( -- Playlist types
+    PlaylistsResponse(..)
   , PlaylistInfo(..)
   , PlaylistSnippetInfo(..)
   , PlaylistContentDetails(..)
@@ -33,38 +28,6 @@ module Types
 import Data.Aeson
 import GHC.Generics
 import qualified Data.Text as T
-
--- =============================================================================
--- OAuth Types
--- =============================================================================
-
-data ClientSecrets = ClientSecrets
-  { installed :: ClientConfig
-  } deriving stock (Show, Generic)
-    deriving anyclass (FromJSON, ToJSON)
-
-data ClientConfig = ClientConfig
-  { client_id :: T.Text
-  , client_secret :: T.Text
-  , auth_uri :: T.Text
-  , token_uri :: T.Text
-  , redirect_uris :: [T.Text]
-  } deriving stock (Show, Generic)
-    deriving anyclass (FromJSON, ToJSON)
-
-data TokenResponse = TokenResponse
-  { access_token :: T.Text
-  , token_type :: T.Text
-  , expires_in :: Maybe Int
-  , refresh_token :: Maybe T.Text
-  } deriving stock (Show, Generic)
-    deriving anyclass (FromJSON, ToJSON)
-
-data StoredToken = StoredToken
-  { stored_token :: TokenResponse
-  , obtained_at :: Integer
-  } deriving stock (Show, Generic)
-    deriving anyclass (FromJSON, ToJSON)
 
 -- =============================================================================
 -- Playlist Types
