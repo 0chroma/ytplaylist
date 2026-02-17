@@ -23,6 +23,8 @@ executable ytplaylist
                      , http-client
                      , http-client-tls
                      , req >= 3.0
+                     , optparse-applicative
+                     , fmt
                      , http-types
                      , directory
                      , filepath

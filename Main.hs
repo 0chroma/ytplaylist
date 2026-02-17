@@ -5,7 +5,7 @@ module Main where
 
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
-import System.Environment (getArgs)
+import Options.Applicative
 import System.Exit (exitFailure, exitSuccess)
 import System.IO (hFlush, stdout, stderr, hSetBuffering, BufferMode(..))
 import Control.Exception (try, SomeException)
@@ -14,169 +14,181 @@ import OAuth
 import YouTube
 
 -- =============================================================================
--- Main Program
+-- Command Types
+-- =============================================================================
+
+data Command
+  = Auth
+  | ListPlaylists
+  | ListVideos T.Text
+  | RemoveVideo T.Text
+  | CreatePlaylist (Maybe T.Text) (Maybe T.Text) (Maybe T.Text)
+  | AddVideo T.Text T.Text
+  | DeletePlaylist T.Text
+  | AddVideos T.Text FilePath
+  | RemoveVideos T.Text FilePath
+  | MoveVideos T.Text T.Text FilePath
+  | Interactive
+
+-- =============================================================================
+-- Main
 -- =============================================================================
 
 main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
   hSetBuffering stderr LineBuffering
-  args <- getArgs
+  cmd <- execParser opts
+  runCommand cmd
+  where
+    opts = info (commandParser <**> helper) $
+      fullDesc <> header "YouTube Playlist Manager - Manage YouTube playlists via API"
 
-  case args of
-    ["--help"] -> printUsage >> exitSuccess
-    ["-h"] -> printUsage >> exitSuccess
-    ["help"] -> printUsage >> exitSuccess
+-- =============================================================================
+-- Command Parser
+-- =============================================================================
 
-    ["auth"] -> do
-      putStrLn "Authenticating with YouTube..."
-      oauth2 <- loadClientSecrets
-      _ <- authenticateInteractive oauth2
-      putStrLn "Authentication successful!"
-      exitSuccess
+commandParser :: Parser Command
+commandParser = hsubparser
+  ( command "auth" (info (pure Auth) $ progDesc "Authenticate with YouTube")
+  <> command "list-playlists" (info (pure ListPlaylists) $ progDesc "List all your playlists")
+  <> command "list" (info listVideosParser $ progDesc "List all videos in a playlist")
+  <> command "remove" (info removeVideoParser $ progDesc "Remove video from playlist (by item ID)")
+  <> command "create-playlist" (info createPlaylistParser $ progDesc "Create a new playlist")
+  <> command "add-video" (info addVideoParser $ progDesc "Add video to playlist")
+  <> command "delete-playlist" (info deletePlaylistParser $ progDesc "Delete a playlist")
+  <> command "add-videos" (info addVideosParser $ progDesc "Add multiple videos from file (1 ID/line)")
+  <> command "remove-videos" (info removeVideosParser $ progDesc "Remove videos by video ID")
+  <> command "move-videos" (info moveVideosParser $ progDesc "Move videos between playlists")
+  ) <|> pure Interactive
 
-    ["list-playlists"] -> do
-      oauth2 <- loadClientSecrets
-      token <- getOrRefreshToken oauth2
-      listPlaylists token
-      exitSuccess
+listVideosParser :: Parser Command
+listVideosParser = ListVideos . T.pack <$> argument str (metavar "PLAYLIST-ID")
 
-    ["list", playlistId] -> do
-      oauth2 <- loadClientSecrets
-      token <- getOrRefreshToken oauth2
-      listPlaylistVideos token (T.pack playlistId)
-      exitSuccess
+removeVideoParser :: Parser Command
+removeVideoParser = RemoveVideo . T.pack <$> argument str (metavar "PLAYLIST-ITEM-ID")
 
-    ["list"] -> do
-      putStrLn "Usage: ytplaylist list <playlist-id>"
-      putStrLn "Example: ytplaylist list PLxxxxxxxxxxxxxx"
-      exitFailure
+createPlaylistParser :: Parser Command
+createPlaylistParser = CreatePlaylist
+  <$> optional (T.pack <$> argument str (metavar "TITLE"))
+  <*> optional (T.pack <$> argument str (metavar "DESCRIPTION"))
+  <*> optional (T.pack <$> argument str (metavar "PRIVACY"))
 
-    ["remove", itemId] -> do
-      oauth2 <- loadClientSecrets
-      token <- getOrRefreshToken oauth2
-      success <- removeVideo token (T.pack itemId)
-      if success
-        then putStrLn $ "Removed: " ++ itemId
-        else putStrLn "Failed to remove video"
-      exitSuccess
+addVideoParser :: Parser Command
+addVideoParser = AddVideo
+  <$> (T.pack <$> argument str (metavar "PLAYLIST-ID"))
+  <*> (T.pack <$> argument str (metavar "VIDEO-ID"))
 
-    ["remove"] -> do
-      putStrLn "Usage: ytplaylist remove <playlist-item-id>"
-      putStrLn "Note: Use 'ytplaylist list <playlist-id>' to get item IDs"
-      exitFailure
+deletePlaylistParser :: Parser Command
+deletePlaylistParser = DeletePlaylist . T.pack <$> argument str (metavar "PLAYLIST-ID")
 
-    ["create-playlist"] -> interactiveCreatePlaylist
+addVideosParser :: Parser Command
+addVideosParser = AddVideos
+  <$> (T.pack <$> argument str (metavar "PLAYLIST-ID"))
+  <*> argument str (metavar "FILE")
 
-    ["create-playlist", title] -> do
-      oauth2 <- loadClientSecrets
-      token <- getOrRefreshToken oauth2
-      mbId <- createPlaylist token (T.pack title) "" "private"
-      case mbId of
-        Just pid -> putStrLn $ T.unpack pid
-        Nothing -> putStrLn "Failed to create playlist"
-      exitSuccess
+removeVideosParser :: Parser Command
+removeVideosParser = RemoveVideos
+  <$> (T.pack <$> argument str (metavar "PLAYLIST-ID"))
+  <*> argument str (metavar "FILE")
 
-    ["create-playlist", title, privacy] -> do
-      oauth2 <- loadClientSecrets
-      token <- getOrRefreshToken oauth2
-      mbId <- createPlaylist token (T.pack title) "" (T.pack privacy)
-      case mbId of
-        Just pid -> putStrLn $ T.unpack pid
-        Nothing -> putStrLn "Failed to create playlist"
-      exitSuccess
+moveVideosParser :: Parser Command
+moveVideosParser = MoveVideos
+  <$> (T.pack <$> argument str (metavar "SOURCE-PLAYLIST-ID"))
+  <*> (T.pack <$> argument str (metavar "TARGET-PLAYLIST-ID"))
+  <*> argument str (metavar "FILE")
 
-    ["create-playlist", title, description, privacy] -> do
-      oauth2 <- loadClientSecrets
-      token <- getOrRefreshToken oauth2
-      mbId <- createPlaylist token (T.pack title) (T.pack description) (T.pack privacy)
-      case mbId of
-        Just pid -> putStrLn $ T.unpack pid
-        Nothing -> putStrLn "Failed to create playlist"
-      exitSuccess
+-- =============================================================================
+-- Token Helper
+-- =============================================================================
 
-    ["add-video", playlistId, videoId] -> do
-      oauth2 <- loadClientSecrets
-      token <- getOrRefreshToken oauth2
-      success <- addVideo token (T.pack playlistId) (T.pack videoId)
-      if success
-        then putStrLn $ "Added video " ++ videoId ++ " to playlist"
-        else putStrLn "Failed to add video"
-      exitSuccess
+withToken :: (OAuth2Token -> IO a) -> IO a
+withToken action = do
+  oauth2 <- loadClientSecrets
+  token <- getOrRefreshToken oauth2
+  action token
 
-    ["add-video", _] -> do
-      putStrLn "Usage: ytplaylist add-video <playlist-id> <video-id>"
-      putStrLn "Example: ytplaylist add-video PLxxxxxxxxxxxxxx dQw4w9WgXcQ"
-      exitFailure
+-- =============================================================================
+-- Command Execution
+-- =============================================================================
 
-    ["delete-playlist", playlistId] -> do
-      oauth2 <- loadClientSecrets
-      token <- getOrRefreshToken oauth2
-      success <- deletePlaylist token (T.pack playlistId)
-      if success
-        then putStrLn $ "Deleted playlist: " ++ playlistId
-        else putStrLn "Failed to delete playlist"
-      exitSuccess
+runCommand :: Command -> IO ()
+runCommand cmd = case cmd of
+  Auth -> do
+    putStrLn "Authenticating with YouTube..."
+    oauth2 <- loadClientSecrets
+    _ <- authenticateInteractive oauth2
+    putStrLn "Authentication successful!"
 
-    ["delete-playlist"] -> do
-      putStrLn "Usage: ytplaylist delete-playlist <playlist-id>"
-      exitFailure
+  ListPlaylists -> withToken listPlaylists
 
-    -- Batch operations
-    ["add-videos", playlistId, filePath] -> do
-      oauth2 <- loadClientSecrets
-      token <- getOrRefreshToken oauth2
-      content <- readFile filePath
-      let videoIds = map T.pack $ filter (not . null) $ lines content
-      putStrLn $ "Adding " ++ show (length videoIds) ++ " videos to playlist..."
-      (success, failed) <- addVideos token (T.pack playlistId) videoIds
+  ListVideos pid -> withToken (`listPlaylistVideos` pid)
+
+  RemoveVideo itemId -> withToken $ \token -> do
+    success <- removeVideo token itemId
+    putStrLn $ if success then "Removed: " ++ T.unpack itemId else "Failed to remove video"
+
+  CreatePlaylist Nothing _ _ -> interactiveCreatePlaylist
+  CreatePlaylist (Just title) Nothing _ -> withToken $ \token -> do
+    mbId <- createPlaylist token title "" "private"
+    case mbId of
+      Just pid -> putStrLn $ T.unpack pid
+      Nothing -> putStrLn "Failed to create playlist"
+  CreatePlaylist (Just title) (Just desc) Nothing -> withToken $ \token -> do
+    mbId <- createPlaylist token title desc "private"
+    case mbId of
+      Just pid -> putStrLn $ T.unpack pid
+      Nothing -> putStrLn "Failed to create playlist"
+  CreatePlaylist (Just title) (Just desc) (Just privacy) -> withToken $ \token -> do
+    mbId <- createPlaylist token title desc privacy
+    case mbId of
+      Just pid -> putStrLn $ T.unpack pid
+      Nothing -> putStrLn "Failed to create playlist"
+
+  AddVideo pid vid -> withToken $ \token -> do
+    success <- addVideo token pid vid
+    putStrLn $ if success
+      then "Added video " ++ T.unpack vid ++ " to playlist"
+      else "Failed to add video"
+
+  DeletePlaylist pid -> withToken $ \token -> do
+    success <- deletePlaylist token pid
+    putStrLn $ if success then "Deleted playlist: " ++ T.unpack pid else "Failed to delete playlist"
+
+  AddVideos pid file -> do
+    videoIds <- readVideoIds file
+    putStrLn $ "Adding " ++ show (length videoIds) ++ " videos to playlist..."
+    withToken $ \token -> do
+      (success, failed) <- addVideos token pid videoIds
       putStrLn $ "\nDone! Added: " ++ show success ++ ", Failed: " ++ show failed
-      exitSuccess
 
-    ["add-videos", _] -> do
-      putStrLn "Usage: ytplaylist add-videos <playlist-id> <file>"
-      putStrLn "File should contain one video ID per line"
-      exitFailure
-
-    ["remove-videos", playlistId, filePath] -> do
-      oauth2 <- loadClientSecrets
-      token <- getOrRefreshToken oauth2
-      content <- readFile filePath
-      let videoIds = map T.pack $ filter (not . null) $ lines content
-      putStrLn $ "Removing " ++ show (length videoIds) ++ " videos from playlist..."
-      (success, failed) <- removeVideosByVideoId token (T.pack playlistId) videoIds
+  RemoveVideos pid file -> do
+    videoIds <- readVideoIds file
+    putStrLn $ "Removing " ++ show (length videoIds) ++ " videos from playlist..."
+    withToken $ \token -> do
+      (success, failed) <- removeVideosByVideoId token pid videoIds
       putStrLn $ "\nDone! Removed: " ++ show success ++ ", Failed: " ++ show failed
-      exitSuccess
 
-    ["remove-videos", _] -> do
-      putStrLn "Usage: ytplaylist remove-videos <playlist-id> <file>"
-      putStrLn "File should contain one video ID per line"
-      putStrLn "Videos are looked up by ID and removed from the playlist"
-      exitFailure
+  MoveVideos src dst file -> do
+    videoIds <- readVideoIds file
+    putStrLn $ "Moving " ++ show (length videoIds) ++ " videos..."
+    withToken $ \token -> do
+      (added, removed, failed) <- moveVideos token src dst videoIds
+      putStrLn $ "\nDone! Added: " ++ show added ++ ", Removed: " ++ show removed ++ ", Failed: " ++ show failed
 
-    ["move-videos", sourcePlaylist, targetPlaylist, filePath] -> do
-      oauth2 <- loadClientSecrets
-      token <- getOrRefreshToken oauth2
-      content <- readFile filePath
-      let videoIds = map T.pack $ filter (not . null) $ lines content
-      putStrLn $ "Moving " ++ show (length videoIds) ++ " videos..."
-      (added, removed, failed) <- moveVideos token (T.pack sourcePlaylist) (T.pack targetPlaylist) videoIds
-      putStrLn $ "\nDone! Added to target: " ++ show added ++ ", Removed from source: " ++ show removed ++ ", Failed: " ++ show failed
-      exitSuccess
+  Interactive -> interactiveMode
 
-    ["move-videos", _] -> do
-      putStrLn "Usage: ytplaylist move-videos <source-playlist-id> <target-playlist-id> <file>"
-      putStrLn "File should contain one video ID per line"
-      exitFailure
+readVideoIds :: FilePath -> IO [T.Text]
+readVideoIds file = do
+  content <- readFile file
+  return $ map T.pack $ filter (not . null) $ lines content
 
-    [] -> interactiveMode
-
-    _ -> printUsage >> exitFailure
+-- =============================================================================
+-- Interactive Mode
+-- =============================================================================
 
 interactiveCreatePlaylist :: IO ()
 interactiveCreatePlaylist = do
-  oauth2 <- loadClientSecrets
-  token <- getOrRefreshToken oauth2
   putStr "Playlist title: "
   hFlush stdout
   title <- T.getLine
@@ -187,11 +199,18 @@ interactiveCreatePlaylist = do
   hFlush stdout
   privacy <- getLine
   let privacyStatus = if null privacy then "private" else privacy
-  mbId <- createPlaylist token title desc (T.pack privacyStatus)
-  case mbId of
-    Just pid -> putStrLn $ "Created playlist: " ++ T.unpack pid
-    Nothing -> putStrLn "Failed to create playlist"
-  exitSuccess
+  withToken $ \token -> do
+    mbId <- createPlaylist token title desc (T.pack privacyStatus)
+    case mbId of
+      Just pid -> putStrLn $ "Created playlist: " ++ T.unpack pid
+      Nothing -> putStrLn "Failed to create playlist"
+
+safeCmd :: IO () -> IO ()
+safeCmd action = do
+  result <- try @SomeException action
+  case result of
+    Left e -> putStrLn $ "Error: " ++ show e
+    Right () -> return ()
 
 interactiveMode :: IO ()
 interactiveMode = do
@@ -212,7 +231,7 @@ interactiveMode = do
       hFlush stdout
       cmd <- getLine
       case cmd of
-        "p" -> cmdListPlaylists >> loop
+        "p" -> safeCmd cmdListPlaylists >> loop
         "l" -> cmdListVideos >> loop
         "r" -> cmdRemoveVideo >> loop
         "c" -> cmdCreatePlaylist >> loop
@@ -222,41 +241,23 @@ interactiveMode = do
         _ -> putStrLn "Unknown command" >> loop
 
 cmdListPlaylists :: IO ()
-cmdListPlaylists = do
-  result <- try @SomeException $ do
-    oauth2 <- loadClientSecrets
-    token <- getOrRefreshToken oauth2
-    listPlaylists token
-  case result of
-    Left e -> putStrLn $ "Error: " ++ show e
-    Right () -> return ()
+cmdListPlaylists = withToken listPlaylists
 
 cmdListVideos :: IO ()
 cmdListVideos = do
   putStr "Enter playlist ID: "
   hFlush stdout
   pid <- T.getLine
-  result <- try @SomeException $ do
-    oauth2 <- loadClientSecrets
-    token <- getOrRefreshToken oauth2
-    listPlaylistVideos token pid
-  case result of
-    Left e -> putStrLn $ "Error: " ++ show e
-    Right () -> return ()
+  safeCmd $ withToken (`listPlaylistVideos` pid)
 
 cmdRemoveVideo :: IO ()
 cmdRemoveVideo = do
   putStr "Enter playlist item ID to remove: "
   hFlush stdout
   itemId <- T.getLine
-  result <- try @SomeException $ do
-    oauth2 <- loadClientSecrets
-    token <- getOrRefreshToken oauth2
+  safeCmd $ withToken $ \token -> do
     success <- removeVideo token itemId
     putStrLn $ if success then "Removed successfully" else "Failed to remove"
-  case result of
-    Left e -> putStrLn $ "Error: " ++ show e
-    Right () -> return ()
 
 cmdCreatePlaylist :: IO ()
 cmdCreatePlaylist = do
@@ -269,16 +270,11 @@ cmdCreatePlaylist = do
   putStr "Privacy (public/unlisted/private): "
   hFlush stdout
   privacy <- T.getLine
-  result <- try @SomeException $ do
-    oauth2 <- loadClientSecrets
-    token <- getOrRefreshToken oauth2
+  safeCmd $ withToken $ \token -> do
     mbId <- createPlaylist token title desc privacy
     case mbId of
       Just pid -> putStrLn $ "Created: " ++ T.unpack pid
       Nothing -> putStrLn "Failed to create playlist"
-  case result of
-    Left e -> putStrLn $ "Error: " ++ show e
-    Right () -> return ()
 
 cmdAddVideo :: IO ()
 cmdAddVideo = do
@@ -288,14 +284,9 @@ cmdAddVideo = do
   putStr "Video ID: "
   hFlush stdout
   vid <- T.getLine
-  result <- try @SomeException $ do
-    oauth2 <- loadClientSecrets
-    token <- getOrRefreshToken oauth2
+  safeCmd $ withToken $ \token -> do
     success <- addVideo token pid vid
     putStrLn $ if success then "Added successfully" else "Failed to add"
-  case result of
-    Left e -> putStrLn $ "Error: " ++ show e
-    Right () -> return ()
 
 cmdDeletePlaylist :: IO ()
 cmdDeletePlaylist = do
@@ -307,50 +298,6 @@ cmdDeletePlaylist = do
   confirm <- getLine
   if confirm /= "yes"
     then putStrLn "Cancelled"
-    else do
-      result <- try @SomeException $ do
-        oauth2 <- loadClientSecrets
-        token <- getOrRefreshToken oauth2
-        success <- deletePlaylist token pid
-        putStrLn $ if success then "Deleted successfully" else "Failed to delete"
-      case result of
-        Left e -> putStrLn $ "Error: " ++ show e
-        Right () -> return ()
-
-printUsage :: IO ()
-printUsage = do
-  putStrLn "YouTube Playlist Manager - Manage YouTube playlists via API"
-  putStrLn ""
-  putStrLn "Usage: ytplaylist [COMMAND]"
-  putStrLn ""
-  putStrLn "Commands:"
-  putStrLn "  auth                              Authenticate with YouTube"
-  putStrLn "  list-playlists                    List all your playlists"
-  putStrLn "  list <playlist-id>                List all videos in a playlist"
-  putStrLn "  remove <playlist-item-id>         Remove video from playlist (by item ID)"
-  putStrLn "  create-playlist                   Create a new playlist (interactive)"
-  putStrLn "  create-playlist <title>           Create playlist (private, no description)"
-  putStrLn "  create-playlist <title> <privacy> Create playlist with privacy setting"
-  putStrLn "  add-video <playlist-id> <vid>     Add video to playlist"
-  putStrLn "  delete-playlist <playlist-id>     Delete a playlist"
-  putStrLn ""
-  putStrLn "Batch Operations:"
-  putStrLn "  add-videos <playlist> <file>      Add multiple videos from file (1 ID/line)"
-  putStrLn "  remove-videos <playlist> <file>   Remove videos by video ID (looks up item ID)"
-  putStrLn "  move-videos <src> <dst> <file>    Move videos between playlists"
-  putStrLn ""
-  putStrLn "  (no command)                      Interactive mode"
-  putStrLn "  --help, -h, help                  Show this help"
-  putStrLn ""
-  putStrLn "Setup:"
-  putStrLn "  1. Place client_secrets.json in this directory"
-  putStrLn "  2. Run: ytplaylist auth"
-  putStrLn "  3. Run: ytplaylist"
-  putStrLn ""
-  putStrLn "Examples:"
-  putStrLn "  ytplaylist list-playlists                    # Show all playlists"
-  putStrLn "  ytplaylist list PLxxxxxxxxxxx                # List videos"
-  putStrLn "  ytplaylist remove PLxxxxxxxxxxx.xxxxxxxxxxx  # Remove video"
-  putStrLn "  ytplaylist add-videos PLxxx videos.txt       # Batch add"
-  putStrLn "  ytplaylist remove-videos PLxxx videos.txt    # Batch remove by video ID"
-  putStrLn "  ytplaylist move-videos PLsrc PLdst vids.txt  # Batch move"
+    else safeCmd $ withToken $ \token -> do
+      success <- deletePlaylist token pid
+      putStrLn $ if success then "Deleted successfully" else "Failed to delete"
