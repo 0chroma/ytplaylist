@@ -26,13 +26,10 @@ import Data.Aeson.Encode.Pretty (encodePretty)
 import GHC.Generics (Generic)
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
-import qualified Data.Text.IO as T
-import Network.HTTP.Client (newManager)
-import Network.HTTP.Client.TLS (tlsManagerSettings)
+import Network.HTTP.Client.TLS (getGlobalManager)
 import System.Directory (doesFileExist)
 import System.IO (hFlush, stdout)
-import System.Process (proc, createProcess, waitForProcess, std_out, std_err, StdStream(..))
-import Control.Exception (try, SomeException)
+import Web.Browser (openBrowser)
 import Control.Monad.Trans.Except (runExceptT)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 
@@ -71,26 +68,10 @@ googleOAuth2 clientId clientSecret _redirectUri = OAuth2
 data StoredToken = StoredToken
   { storedToken :: OAuth2Token
   , obtainedAt :: Integer
-  } deriving (Show)
+  } deriving (Show, Generic)
 
-instance ToJSON StoredToken where
-  toJSON (StoredToken tok ts) = object
-    [ "accessToken" .= accessToken tok
-    , "refreshToken" .= refreshToken tok
-    , "expiresIn" .= expiresIn tok
-    , "tokenType" .= tokenType tok
-    , "obtainedAt" .= ts
-    ]
-
-instance FromJSON StoredToken where
-  parseJSON = withObject "StoredToken" $ \v -> StoredToken
-    <$> (OAuth2Token
-          <$> v .: "accessToken"
-          <*> v .:? "refreshToken"
-          <*> v .:? "expiresIn"
-          <*> v .:? "tokenType"
-          <*> pure Nothing)
-    <*> v .: "obtainedAt"
+instance ToJSON StoredToken
+instance FromJSON StoredToken
 
 -- =============================================================================
 -- Client Secrets
@@ -144,7 +125,7 @@ getOrRefreshToken oauth2Config = do
 
 refreshAccessToken' :: OAuth2 -> RefreshToken -> IO OAuth2Token
 refreshAccessToken' oauth2Config rt = do
-  manager <- newManager tlsManagerSettings
+  manager <- getGlobalManager
   result <- runExceptT $ TokenRequest.refreshAccessToken manager oauth2Config rt
   case result of
     Left err -> error $ "Token refresh failed: " ++ show err
@@ -178,44 +159,15 @@ authenticateInteractive oauth2Config = do
 
   putStrLn "\nOpening browser for authentication..."
   putStrLn $ "If browser doesn't open, visit:\n" ++ show authUrl ++ "\n"
-  _ <- tryOpenBrowser (show authUrl)
+  _ <- openBrowser (show authUrl)
   putStr "Enter the authorization code: "
   hFlush stdout
   code <- getLine
 
-  manager <- newManager tlsManagerSettings
+  manager <- getGlobalManager
   result <- runExceptT $ TokenRequest.fetchAccessToken manager oauth2Config (ExchangeToken $ T.pack code)
   case result of
     Left err -> error $ "Token exchange failed: " ++ show err
     Right token -> do
       saveToken token
       return token
-
--- =============================================================================
--- Helper Functions
--- =============================================================================
-
-tryOpenBrowser :: String -> IO ()
-tryOpenBrowser url = go
-  [ ("xdg-open", [url])
-  , ("open", [url])
-  , ("firefox", [url])
-  , ("google-chrome", [url])
-  ]
-  where
-    go [] = return ()
-    go ((cmd, args):rest) = do
-      success <- tryCommand cmd args
-      if success then return () else go rest
-    tryCommand cmd args = do
-      result <- try (callProcessSilent cmd args) :: IO (Either SomeException ())
-      return $ case result of
-        Left _ -> False
-        Right _ -> True
-
-callProcessSilent :: String -> [String] -> IO ()
-callProcessSilent cmd args = do
-  (_, _, _, ph) <- createProcess (proc cmd args)
-    { std_out = NoStream, std_err = NoStream }
-  _ <- waitForProcess ph
-  return ()

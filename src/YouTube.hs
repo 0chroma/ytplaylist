@@ -28,7 +28,7 @@ import Data.Function (on)
 import qualified Data.Map.Strict as Map
 import qualified Network.URI.Encode as URI
 
-import Network.OAuth.OAuth2 (AccessToken(..), OAuth2Token(..))
+import Network.OAuth.OAuth2 (OAuth2Token(..))
 import Types
 import HTTP
 
@@ -158,7 +158,7 @@ removeVideosByItemId token items = do
       batchSize = 100
       batches = chunksOf batchSize items
   putStrLn $ "Removing " ++ show total ++ " videos in " ++ show (length batches) ++ " batch(es)..."
-  results <- concat <$> mapM removeBatch (zip [1..] batches)
+  results <- concat <$> mapM removeBatch (zip [1::Int ..] batches)
   return results
   where
     chunksOf _ [] = []
