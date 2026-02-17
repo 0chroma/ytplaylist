@@ -22,6 +22,7 @@ executable ytplaylist
                      , text
                      , http-client
                      , http-client-tls
+                     , req >= 3.0
                      , http-types
                      , directory
                      , filepath

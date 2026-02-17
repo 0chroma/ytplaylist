@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DataKinds #-}
 
 module HTTP
   ( -- Configuration
@@ -19,11 +20,15 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
-import Network.HTTP.Client
+import Network.HTTP.Client (RequestBody(..), parseRequest, responseStatus, requestHeaders, method, requestBody, httpLbs)
+import qualified Network.HTTP.Client as HC (responseBody)
 import Network.HTTP.Client.TLS (getGlobalManager)
-import Network.HTTP.Types (methodPost, methodDelete, status200, status204, hAuthorization, hContentType)
+import Network.HTTP.Types (status200)
 import Data.List (isInfixOf)
 import qualified Network.URI.Encode as URI
+import Network.HTTP.Req (Url, Option, Scheme(..), GET(..), POST(..), DELETE(..), lbsResponse, NoReqBody(..), ReqBodyJson(..), runReq, defaultHttpConfig, req, useHttpsURI, header, responseStatusCode, responseBody)
+import Data.Maybe (fromJust)
+import Text.URI (mkURI)
 
 import Network.OAuth.OAuth2 (AccessToken(..))
 import Types
@@ -42,43 +47,38 @@ batchUrl = "https://www.googleapis.com/batch/youtube/v3"
 -- HTTP Helpers
 -- =============================================================================
 
-authHeader :: AccessToken -> BS8.ByteString
-authHeader (AccessToken token) = "Bearer " <> encodeUtf8 token
+parseUrl :: String -> (Url 'Https, Option 'Https)
+parseUrl urlStr = fromJust $ do
+  uri <- mkURI (T.pack urlStr)
+  useHttpsURI uri
+
+authHeader :: AccessToken -> Option 'Https
+authHeader (AccessToken token) = header "Authorization" ("Bearer " <> encodeUtf8 token)
 
 getJSON :: (FromJSON a) => AccessToken -> String -> IO (Either String a)
-getJSON token urlStr = do
-  manager <- getGlobalManager
-  request <- parseRequest urlStr
-  let request' = request { requestHeaders = [(hAuthorization, authHeader token)] }
-  response <- httpLbs request' manager
-  if responseStatus response == status200
+getJSON token urlStr = runReq defaultHttpConfig $ do
+  let (url, opts) = parseUrl urlStr
+  response <- req GET url NoReqBody lbsResponse (authHeader token <> opts)
+  if responseStatusCode response == 200
     then return $ eitherDecode (responseBody response)
-    else return $ Left $ "HTTP " ++ show (responseStatus response)
+    else return $ Left $ "HTTP " ++ show (responseStatusCode response)
 
 postJSON :: (ToJSON a, FromJSON b) => AccessToken -> String -> a -> IO (Either String b)
-postJSON token urlStr body = do
-  manager <- getGlobalManager
-  request <- parseRequest urlStr
-  let request' = request
-        { method = methodPost
-        , requestBody = RequestBodyLBS $ encode body
-        , requestHeaders = [(hAuthorization, authHeader token), (hContentType, "application/json")]
-        }
-  response <- httpLbs request' manager
-  if responseStatus response == status200
+postJSON token urlStr body = runReq defaultHttpConfig $ do
+  let (url, opts) = parseUrl urlStr
+  response <- req POST url (ReqBodyJson body) lbsResponse (authHeader token <> opts)
+  if responseStatusCode response == 200
     then return $ eitherDecode (responseBody response)
-    else return $ Left $ "HTTP " ++ show (responseStatus response)
+    else return $ Left $ "HTTP " ++ show (responseStatusCode response)
 
 deleteRequest :: AccessToken -> String -> IO Bool
-deleteRequest token urlStr = do
-  manager <- getGlobalManager
-  request <- parseRequest urlStr
-  let request' = request { method = methodDelete, requestHeaders = [(hAuthorization, authHeader token)] }
-  response <- httpLbs request' manager
-  return $ responseStatus response == status204
+deleteRequest token urlStr = runReq defaultHttpConfig $ do
+  let (url, opts) = parseUrl urlStr
+  response <- req DELETE url NoReqBody lbsResponse (authHeader token <> opts)
+  return $ responseStatusCode response == 204
 
 -- =============================================================================
--- Batch HTTP Helpers
+-- Batch HTTP Helpers (uses http-client directly for multipart)
 -- =============================================================================
 
 buildBatchBody :: String -> [BS8.ByteString] -> BS8.ByteString
@@ -100,19 +100,20 @@ batchRequest :: AccessToken -> [BS8.ByteString] -> IO [Bool]
 batchRequest token subRequests = do
   let boundary = "batch_" ++ take 16 (filter (`elem` (['a'..'z'] ++ ['0'..'9'])) $ show $ hashBoundary subRequests)
       body = buildBatchBody boundary subRequests
+      authBS = case token of AccessToken t -> "Bearer " <> encodeUtf8 t
   manager <- getGlobalManager
   request <- parseRequest batchUrl
   let request' = request
-        { method = methodPost
+        { method = "POST"
         , requestBody = RequestBodyBS body
         , requestHeaders =
-          [ (hAuthorization, authHeader token)
-          , (hContentType, BS8.pack $ "multipart/mixed; boundary=" ++ boundary)
+          [ ("Authorization", authBS)
+          , ("Content-Type", BS8.pack $ "multipart/mixed; boundary=" ++ boundary)
           ]
         }
   response <- httpLbs request' manager
   if responseStatus response == status200
-    then return $ parseBatchResponse $ responseBody response
+    then return $ parseBatchResponse $ HC.responseBody response
     else return $ replicate (length subRequests) False
   where
     hashBoundary reqs = sum $ map (fromEnum . BS8.head . BS8.take 1) reqs
