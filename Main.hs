@@ -159,8 +159,8 @@ runCommand cmd = case cmd of
     videoIds <- readVideoIds file
     putStrLn $ "Adding " ++ show (length videoIds) ++ " videos to playlist..."
     withToken $ \token -> do
-      (success, failed) <- addVideos token pid videoIds
-      putStrLn $ "\nDone! Added: " ++ show success ++ ", Failed: " ++ show failed
+      (successIds, failedIds) <- addVideos token pid videoIds
+      putStrLn $ "\nDone! Added: " ++ show (length successIds) ++ ", Failed: " ++ show (length failedIds)
 
   RemoveVideos pid file -> do
     videoIds <- readVideoIds file

@@ -123,16 +123,16 @@ addVideo token playlistId videoId = do
   result <- postJSON (accessToken token) url reqBody :: IO (Either String Value)
   return $ case result of Left _ -> False; Right _ -> True
 
-addVideos :: OAuth2Token -> T.Text -> [T.Text] -> IO (Int, Int)
+addVideos :: OAuth2Token -> T.Text -> [T.Text] -> IO ([T.Text], [T.Text])
 addVideos token playlistId videoIds = do
   let total = length videoIds
       batchSize = 100
       batches = chunksOf batchSize videoIds
   fmtLn $ "Adding "+||total||+" videos in "+||length batches||+" batch(es)..."
   results <- concat <$> mapM (addBatch token playlistId) (zip [1..] batches)
-  let success = length $ filter id results
-      failed = total - success
-  return (success, failed)
+  let successIds = map fst $ filter snd $ zip videoIds results
+      failedIds = map fst $ filter (not . snd) $ zip videoIds results
+  return (successIds, failedIds)
   where
     chunksOf _ [] = []
     chunksOf n xs = take n xs : chunksOf n (drop n xs)
@@ -197,22 +197,28 @@ removeVideoByVideoId token playlistId videoId = do
 moveVideos :: OAuth2Token -> T.Text -> T.Text -> [T.Text] -> IO (Int, Int, Int)
 moveVideos token sourcePlaylist targetPlaylist videoIds = do
   let total = length videoIds
-      videoIdSet = Map.fromList $ map (, ()) videoIds
 
   fmtLn $ "Phase 1: Adding "+||total||+" videos to target playlist..."
-  (added, _) <- addVideos token targetPlaylist videoIds
+  (addedIds, failedIds) <- addVideos token targetPlaylist videoIds
+  let added = length addedIds
 
-  fmtLn "\nPhase 2: Fetching source playlist for removal..."
-  items <- fetchPlaylistItems token sourcePlaylist
-  let itemsToRemove = reverse $ sortByPosition $ filter shouldRemove items
-      shouldRemove item = res_videoId (plitem_resourceId $ plitem_snippet item) `Map.member` videoIdSet
+  if null addedIds
+    then do
+      fmtLn "\nNo videos were successfully added. Skipping removal phase."
+      return (0, 0, total)
+    else do
+      fmtLn "\nPhase 2: Fetching source playlist for removal..."
+      let addedSet = Map.fromList $ map (, ()) addedIds
+      items <- fetchPlaylistItems token sourcePlaylist
+      let itemsToRemove = reverse $ sortByPosition $ filter shouldRemove items
+          shouldRemove item = res_videoId (plitem_resourceId $ plitem_snippet item) `Map.member` addedSet
 
-  removeResults <- removeVideosByItemId token itemsToRemove
+      removeResults <- removeVideosByItemId token itemsToRemove
 
-  let removed = length $ filter id removeResults
-      failed = total - added
+      let removed = length $ filter id removeResults
+          failed = length failedIds
 
-  return (added, removed, failed)
+      return (added, removed, failed)
   where
     sortByPosition = sortBy (compare `on` (plitem_position . plitem_snippet))
 
