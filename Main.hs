@@ -6,10 +6,10 @@ module Main where
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import Options.Applicative
-import System.Exit (exitFailure, exitSuccess)
 import System.IO (hFlush, stdout, stderr, hSetBuffering, BufferMode(..))
 import Control.Exception (try, SomeException)
 
+import Data.Maybe (fromMaybe)
 import OAuth
 import YouTube
 
@@ -103,10 +103,10 @@ moveVideosParser = MoveVideos
 -- =============================================================================
 
 withToken :: (OAuth2Token -> IO a) -> IO a
-withToken action = do
+withToken run = do
   oauth2 <- loadClientSecrets
   token <- getOrRefreshToken oauth2
-  action token
+  run token
 
 -- =============================================================================
 -- Command Execution
@@ -128,22 +128,15 @@ runCommand cmd = case cmd of
     success <- removeVideo token itemId
     putStrLn $ if success then "Removed: " ++ T.unpack itemId else "Failed to remove video"
 
-  CreatePlaylist Nothing _ _ -> interactiveCreatePlaylist
-  CreatePlaylist (Just title) Nothing _ -> withToken $ \token -> do
-    mbId <- createPlaylist token title "" "private"
-    case mbId of
-      Just pid -> putStrLn $ T.unpack pid
-      Nothing -> putStrLn "Failed to create playlist"
-  CreatePlaylist (Just title) (Just desc) Nothing -> withToken $ \token -> do
-    mbId <- createPlaylist token title desc "private"
-    case mbId of
-      Just pid -> putStrLn $ T.unpack pid
-      Nothing -> putStrLn "Failed to create playlist"
-  CreatePlaylist (Just title) (Just desc) (Just privacy) -> withToken $ \token -> do
-    mbId <- createPlaylist token title desc privacy
-    case mbId of
-      Just pid -> putStrLn $ T.unpack pid
-      Nothing -> putStrLn "Failed to create playlist"
+  CreatePlaylist mTitle mDesc mPrivacy
+    | Just title <- mTitle -> withToken $ \token -> do
+        let desc = fromMaybe "" mDesc
+            privacy = fromMaybe "private" mPrivacy
+        mbId <- createPlaylist token title desc privacy
+        case mbId of
+          Just pid -> putStrLn $ T.unpack pid
+          Nothing -> putStrLn "Failed to create playlist"
+    | otherwise -> interactiveCreatePlaylist
 
   AddVideo pid vid -> withToken $ \token -> do
     success <- addVideo token pid vid
@@ -206,8 +199,8 @@ interactiveCreatePlaylist = do
       Nothing -> putStrLn "Failed to create playlist"
 
 safeCmd :: IO () -> IO ()
-safeCmd action = do
-  result <- try @SomeException action
+safeCmd cmd = do
+  result <- try @SomeException cmd
   case result of
     Left e -> putStrLn $ "Error: " ++ show e
     Right () -> return ()
