@@ -29,9 +29,19 @@ import qualified Data.Map.Strict as Map
 import qualified Network.URI.Encode as URI
 import Fmt (fmtLn, (+||), (||+), build, padLeftF, padRightF)
 
+-- Note: We import specific items from HTTP to ensure future edits don't accidentally
+-- break the build. If you add new functions to HTTP.hs, you must explicitly add them
+-- to this import list. This prevents issues like only importing BatchResult and losing
+-- access to baseUrl, getJSON, postJSON, deleteRequest, etc.
 import Network.OAuth.OAuth2 (OAuth2Token(..))
 import Types
 import HTTP
+  ( BatchResult(..)
+  , baseUrl
+  , getJSON
+  , postJSON
+  , deleteRequest
+  )
 
 -- =============================================================================
 -- Playlist Operations
@@ -126,29 +136,19 @@ addVideo token playlistId videoId = do
 addVideos :: OAuth2Token -> T.Text -> [T.Text] -> IO ([T.Text], [T.Text])
 addVideos token playlistId videoIds = do
   let total = length videoIds
-      batchSize = 100
-      batches = chunksOf batchSize videoIds
-  fmtLn $ "Adding "+||total||+" videos in "+||length batches||+" batch(es)..."
-  results <- concat <$> mapM (addBatch token playlistId) (zip [1..] batches)
-  let successIds = map fst $ filter (batchSuccess . snd) $ zip videoIds results
-      failedIds = map fst $ filter (not . batchSuccess . snd) $ zip videoIds results
+  fmtLn $ "Adding "+||total||+" videos one at a time..."
+  results <- mapM (addVideoSingle token playlistId) videoIds
+  let successIds = map fst $ filter snd $ zip videoIds results
+      failedIds = map fst $ filter (not . snd) $ zip videoIds results
   return (successIds, failedIds)
-  where
-    chunksOf _ [] = []
-    chunksOf n xs = take n xs : chunksOf n (drop n xs)
 
-addBatch :: OAuth2Token -> T.Text -> (Int, [T.Text]) -> IO [BatchResult]
-addBatch token playlistId (batchNum, videoIds) = do
-  fmtLn $ "  Batch "+||batchNum||+": "+||length videoIds||+" videos"
-  let subRequests = map (buildAddSubRequest playlistId) videoIds
-  results <- batchRequest (accessToken token) subRequests
-  mapM_ printResult (zip videoIds results)
-  return results
-  where
-    printResult (vid, result) =
-      case batchError result of
-        Just err -> fmtLn $ "    ✗ "+||vid||+" ("+||err||+")"
-        Nothing -> fmtLn $ if batchSuccess result then "    ✓ "+||vid||+"" else "    ✗ "+||vid||+""
+addVideoSingle :: OAuth2Token -> T.Text -> T.Text -> IO Bool
+addVideoSingle token playlistId videoId = do
+  success <- addVideo token playlistId videoId
+  if success
+    then fmtLn $ "  ✓ "+||videoId||+""
+    else fmtLn $ "  ✗ "+||videoId||+""
+  return success
 
 removeVideo :: OAuth2Token -> T.Text -> IO Bool
 removeVideo token itemId =
@@ -157,25 +157,17 @@ removeVideo token itemId =
 removeVideosByItemId :: OAuth2Token -> [PlaylistItem] -> IO [Bool]
 removeVideosByItemId token items = do
   let total = length items
-      batchSize = 100
-      batches = chunksOf batchSize items
-  fmtLn $ "Removing "+||total||+" videos in "+||length batches||+" batch(es)..."
-  results <- concat <$> mapM removeBatch (zip [1::Int ..] batches)
+  fmtLn $ "Removing "+||total||+" videos one at a time..."
+  results <- mapM removeSingle items
   return $ map batchSuccess results
   where
-    chunksOf _ [] = []
-    chunksOf n xs = take n xs : chunksOf n (drop n xs)
-    removeBatch (batchNum, batchItems) = do
-      fmtLn $ "  Batch "+||batchNum||+": "+||length batchItems||+" videos"
-      let subRequests = map (buildDeleteSubRequest . plitem_id) batchItems
-      results <- batchRequest (accessToken token) subRequests
-      mapM_ printResult (zip batchItems results)
-      return results
-    printResult (item, result) = do
+    removeSingle item = do
       let vid = res_videoId $ plitem_resourceId $ plitem_snippet item
-      case batchError result of
-        Just err -> fmtLn $ "    ✗ "+||vid||+" ("+||err||+")"
-        Nothing -> fmtLn $ if batchSuccess result then "    ✓ "+||vid||+"" else "    ✗ "+||vid||+""
+      success <- removeVideo token (plitem_id item)
+      if success
+        then fmtLn $ "  ✓ "+||vid||+""
+        else fmtLn $ "  ✗ "+||vid||+""
+      return $ BatchResult success (if success then Nothing else Just "Failed to remove")
 
 removeVideosByVideoId :: OAuth2Token -> T.Text -> [T.Text] -> IO (Int, Int)
 removeVideosByVideoId token playlistId videoIds = do
@@ -214,7 +206,7 @@ moveVideos token sourcePlaylist targetPlaylist videoIds = do
       fmtLn "\nPhase 2: Fetching source playlist for removal..."
       let addedSet = Map.fromList $ map (, ()) addedIds
       items <- fetchPlaylistItems token sourcePlaylist
-      let itemsToRemove = reverse $ sortByPosition $ filter shouldRemove items
+      let itemsToRemove = sortByPositionDesc $ filter shouldRemove items
           shouldRemove item = res_videoId (plitem_resourceId $ plitem_snippet item) `Map.member` addedSet
 
       removeResults <- removeVideosByItemId token itemsToRemove
@@ -224,7 +216,7 @@ moveVideos token sourcePlaylist targetPlaylist videoIds = do
 
       return (added, removed, failed)
   where
-    sortByPosition = sortBy (compare `on` (plitem_position . plitem_snippet))
+    sortByPositionDesc = sortBy (flip compare `on` (plitem_position . plitem_snippet))
 
 -- =============================================================================
 -- Lookup Helpers

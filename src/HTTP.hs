@@ -163,8 +163,13 @@ parseBatchResponse _ body
       | BL.null part = return $ BatchResult False (Just "Empty response part")
       | otherwise = do
         let partStr = BS8.unpack $ BL.toStrict part
-            isSuccess = "HTTP/1.1 200" `isInfixOf` partStr || "HTTP/1.1 204" `isInfixOf` partStr
-            errorMsg = if isSuccess then Nothing else extractError partStr
+            is409Conflict = "HTTP/1.1 409" `isInfixOf` partStr
+            isSuccess = is409Conflict || "HTTP/1.1 200" `isInfixOf` partStr || "HTTP/1.1 204" `isInfixOf` partStr
+            errorMsg = if isSuccess 
+              then Nothing 
+              else if is409Conflict 
+                then Just "Video already in playlist (409 Conflict - treated as success)" 
+                else extractError partStr
         return $ BatchResult isSuccess errorMsg
     
     extractError :: String -> Maybe String
