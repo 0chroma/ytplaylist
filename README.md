@@ -8,9 +8,10 @@ A Haskell command-line tool to manage YouTube playlists using the YouTube Data A
 - **List** all videos in any playlist (handles 800+ videos with pagination)
 - **Create** new playlists (public, unlisted, or private)
 - **Add** videos to playlists by video ID
-- **Remove** videos by playlist item ID
+- **Remove** videos by video ID
+- **Move** videos between playlists
 - **Delete** entire playlists
-- **Interactive mode** for easy management
+- **Batch operations** for adding, removing, or moving multiple videos from a file
 
 ## Prerequisites
 
@@ -67,28 +68,61 @@ Shows all videos (Item ID, Video ID, Title). Works with playlists of any size us
 ### Create a New Playlist
 
 ```bash
-./ytplaylist create-playlist
+./ytplaylist create-playlist <title> <description> <privacy>
 ```
 
-Interactive prompts for title, description, and privacy status.
+Privacy can be: `public`, `unlisted`, or `private`.
+
+Example:
+```bash
+./ytplaylist create-playlist "My Music" "Favorite songs" "private"
+```
 
 ### Add a Video to a Playlist
 
 ```bash
-./ytplaylist add-video <playlist-id> <video-id>
+./ytplaylist add <playlist-id> <video-id>
 ```
 
 Video ID is the part after `v=` in YouTube URLs:
 - URL: `https://www.youtube.com/watch?v=dQw4w9WgXcQ`
 - Video ID: `dQw4w9WgXcQ`
 
+### Add Multiple Videos (Batch)
+
+```bash
+./ytplaylist add-batch <playlist-id> <file>
+```
+
+The file should contain one video ID per line.
+
 ### Remove a Video from a Playlist
 
 ```bash
-./ytplaylist remove <playlist-item-id>
+./ytplaylist remove <playlist-id> <video-id>
 ```
 
-The playlist item ID is shown in the `list` command output (first column).
+### Remove Multiple Videos (Batch)
+
+```bash
+./ytplaylist remove-batch <playlist-id> <file>
+```
+
+The file should contain one video ID per line.
+
+### Move a Video Between Playlists
+
+```bash
+./ytplaylist move <source-playlist-id> <target-playlist-id> <video-id>
+```
+
+### Move Multiple Videos (Batch)
+
+```bash
+./ytplaylist move-batch <source-playlist-id> <target-playlist-id> <file>
+```
+
+The file should contain one video ID per line.
 
 ### Delete a Playlist
 
@@ -96,20 +130,21 @@ The playlist item ID is shown in the `list` command output (first column).
 ./ytplaylist delete-playlist <playlist-id>
 ```
 
-### Interactive Mode
+## Command Reference
 
-```bash
-./ytplaylist
-```
-
-Interactive menu with:
-- `(p)` list playlists
-- `(l)` list videos in a playlist
-- `(r)` remove video by item ID
-- `(c)` create playlist
-- `(a)` add video to playlist
-- `(d)` delete playlist
-- `(q)` quit
+| Command | Description |
+|---------|-------------|
+| `auth` | Authenticate with YouTube |
+| `list-playlists` | List all your playlists |
+| `list <playlist-id>` | List videos in a playlist |
+| `create-playlist <title> <description> <privacy>` | Create a new playlist |
+| `add <playlist-id> <video-id>` | Add a single video to playlist |
+| `add-batch <playlist-id> <file>` | Add multiple videos from file |
+| `remove <playlist-id> <video-id>` | Remove a single video from playlist |
+| `remove-batch <playlist-id> <file>` | Remove multiple videos from file |
+| `move <source> <target> <video-id>` | Move a single video between playlists |
+| `move-batch <source> <target> <file>` | Move multiple videos from file |
+| `delete-playlist <playlist-id>` | Delete a playlist |
 
 ## Examples
 
@@ -125,16 +160,22 @@ Interactive menu with:
 ./ytplaylist list PLxxxxxxxxxxx
 
 # Create a new playlist
-./ytplaylist create-playlist
-# Enter title: My Music
-# Enter description: Favorite songs
-# Privacy: private
+./ytplaylist create-playlist "My Music" "Favorite songs" "private"
 
 # Add a video
-./ytplaylist add-video PLxxxxxxxxxxx dQw4w9WgXcQ
+./ytplaylist add PLxxxxxxxxxxx dQw4w9WgXcQ
 
-# Remove a video (use Item ID from list output)
-./ytplaylist remove PLxxxxxxxxxxx.xxxxxxxxxxx
+# Add multiple videos from file
+./ytplaylist add-batch PLxxxxxxxxxxx videos.txt
+
+# Remove a video
+./ytplaylist remove PLxxxxxxxxxxx dQw4w9WgXcQ
+
+# Move a video between playlists
+./ytplaylist move PLxxxxxxxxxxx PLyyyyyyyyyyy dQw4w9WgXcQ
+
+# Delete a playlist
+./ytplaylist delete-playlist PLxxxxxxxxxxx
 ```
 
 ## File Structure
@@ -146,6 +187,11 @@ Interactive menu with:
 ├── .gitignore               # Ignores credentials and build artifacts
 ├── youtube-playlist-manager.cabal
 ├── Main.hs                  # Source code
+├── src/                     # Library modules
+│   ├── HTTP.hs
+│   ├── OAuth.hs
+│   ├── Types.hs
+│   └── YouTube.hs
 ├── test/Test.hs             # Test suite
 └── README.md
 ```
