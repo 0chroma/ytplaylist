@@ -23,8 +23,10 @@ module OAuth
 
 import Data.Aeson
 import Data.Aeson.Encode.Pretty (encodePretty)
-import GHC.Generics (Generic)
+import Data.ByteString.Builder (toLazyByteString)
 import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Char8 as B8
+import GHC.Generics (Generic)
 import qualified Data.Text as T
 import Network.HTTP.Client.TLS (getGlobalManager)
 import System.Directory (doesFileExist)
@@ -36,6 +38,7 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import Network.OAuth.OAuth2 (OAuth2(..), OAuth2Token(..), AccessToken(..), RefreshToken(..), ExchangeToken(..), QueryParams)
 import Network.OAuth.OAuth2.AuthorizationRequest (authorizationUrlWithParams)
 import qualified Network.OAuth.OAuth2.TokenRequest as TokenRequest
+import URI.ByteString (serializeURIRef)
 import URI.ByteString.QQ (uri)
 
 -- =============================================================================
@@ -156,10 +159,11 @@ authenticateInteractive oauth2Config = do
         , ("access_type", "offline")
         ]
       authUrl = authorizationUrlWithParams queryParams oauth2Config
+      authUrlString = B8.unpack (BL.toStrict (toLazyByteString (serializeURIRef authUrl)))
 
-  putStrLn "\nOpening browser for authentication..."
-  putStrLn $ "If browser doesn't open, visit:\n" ++ show authUrl ++ "\n"
-  _ <- openBrowser (show authUrl)
+  putStrLn $ "\nOpening browser for authentication..."
+  putStrLn $ "If browser doesn't open, visit:\n" ++ authUrlString ++ "\n"
+  _ <- openBrowser authUrlString
   putStr "Enter the authorization code: "
   hFlush stdout
   code <- getLine
