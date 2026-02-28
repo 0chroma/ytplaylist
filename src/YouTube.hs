@@ -19,6 +19,7 @@ module YouTube
   , moveVideos
     -- Lookup helpers
   , findItemIdByVideoId
+  , fetchVideoDurations
   ) where
 
 import Data.Aeson (Value)
@@ -80,7 +81,7 @@ fetchPlaylistItems :: OAuth2Token -> T.Text -> IO [PlaylistItem]
 fetchPlaylistItems token playlistId = fetchPages Nothing
   where
     fetchPages pageToken = do
-      let base = baseUrl ++ "/playlistItems?part=snippet&playlistId=" ++ T.unpack playlistId ++ "&maxResults=50"
+      let base = baseUrl ++ "/playlistItems?part=snippet,contentDetails&playlistId=" ++ T.unpack playlistId ++ "&maxResults=50"
           url = case pageToken of
                   Nothing -> base
                   Just tok -> base ++ "&pageToken=" ++ URI.encode (T.unpack tok)
@@ -96,20 +97,74 @@ fetchPlaylistItems token playlistId = fetchPages Nothing
 listPlaylistVideos :: OAuth2Token -> T.Text -> IO ()
 listPlaylistVideos token playlistId = do
   items <- fetchPlaylistItems token playlistId
+  let videoIds = map (res_videoId . plitem_resourceId . plitem_snippet) items
+  durations <- fetchVideoDurations token videoIds
   fmtLn "\n=== Playlist Videos ==="
   fmtLn $ "Playlist ID: "+||playlistId||+""
   fmtLn $ "Total: "+||length items||+" videos\n"
-  fmtLn $ padLeftF 4 ' ' (T.pack "#")<>build (T.pack "  ")<>padRightF 20 ' ' (T.pack "Item ID")<>build (T.pack "  ")<>padRightF 15 ' ' (T.pack "Video ID")<>build (T.pack "  Title")
-  fmtLn $ build $ T.replicate 90 "-"
-  mapM_ printItem (zip [1..] items)
+  fmtLn $ padLeftF 4 ' ' (T.pack "#")<>build (T.pack "  ")<>padRightF 8 ' ' (T.pack "Duration")<>padRightF 15 ' ' (T.pack "Video ID")<>build (T.pack "  Title")
+  fmtLn $ build $ T.replicate 75 "-"
+  mapM_ (printItem durations) (zip [1..] items)
   where
-    printItem (idx, item) = do
+    printItem durations (idx, item) = do
       let num = padLeftF 4 ' ' $ show (idx :: Int)
-          itemId = padRightF 20 ' ' $ T.unpack $ plitem_id item
-          vidId = padRightF 15 ' ' $ T.unpack $ res_videoId $ plitem_resourceId $ plitem_snippet item
+          vidId = res_videoId $ plitem_resourceId $ plitem_snippet item
+          duration = case Map.lookup vidId durations of
+                      Just d -> padRightF 8 ' ' $ T.unpack d
+                      Nothing -> padRightF 8 ' ' $ T.unpack (T.pack "??:??:??")
           titleStr = T.unpack $ plitem_title $ plitem_snippet item
-          title = if length titleStr > 40 then take 37 titleStr ++ "..." else titleStr
-      fmtLn $ num<>build (T.pack "  ")<>itemId<>build (T.pack "  ")<>vidId<>build (T.pack "  ")<>build title
+          title = if length titleStr > 50 then take 47 titleStr ++ "..." else titleStr
+      fmtLn $ num<>build (T.pack "  ")<>duration<>build (T.pack "  ")<>build (T.unpack vidId)<>build (T.pack "  ")<>build title
+
+fetchVideoDurations :: OAuth2Token -> [T.Text] -> IO (Map.Map T.Text T.Text)
+fetchVideoDurations token videoIds = do
+  let batches = chunksOf 50 videoIds
+  results <- mapM fetchBatch batches
+  return $ Map.fromList $ concat results
+  where
+    chunksOf _ [] = []
+    chunksOf n xs = take n xs : chunksOf n (drop n xs)
+    fetchBatch ids = do
+      let idsParam = T.intercalate "," ids
+          url = baseUrl ++ "/videos?part=contentDetails&id=" ++ T.unpack idsParam
+      result <- getJSON (accessToken token) url :: IO (Either String VideosResponse)
+      case result of
+        Left _ -> return []
+        Right resp -> return $ map extractDuration $ vr_items resp
+    extractDuration item = (vi_id item, parseDuration $ vcd_duration $ vi_contentDetails item)
+    parseDuration :: T.Text -> T.Text
+    parseDuration dur
+      | T.null dur = "??:??:??"
+      | otherwise = formatDuration dur
+    formatDuration d = formatFromISO d
+      where
+        formatFromISO iso
+          | "PT" `T.isPrefixOf` iso = formatPT (T.drop 2 iso)
+          | otherwise = iso
+        formatPT pt
+          | "H" `T.isInfixOf` pt = formatWithHours pt
+          | otherwise = formatMinutesOnly pt
+        formatWithHours pt = 
+          let (hPart, rest1) = T.breakOn "H" pt
+              afterH = T.drop 1 rest1
+              (mPart, rest2) = T.breakOn "M" afterH
+              hasM = "M" `T.isInfixOf` afterH
+              sPart = if hasM 
+                      then T.takeWhile (/= 'S') (T.drop 1 rest2)
+                      else T.takeWhile (/= 'S') afterH
+              h = if T.null hPart then "0" else T.unpack hPart
+              m = if T.null mPart || not hasM then "00" else padNum $ T.unpack mPart
+              s = if T.null sPart then "00" else padNum $ T.unpack sPart
+          in T.pack $ h ++ ":" ++ m ++ ":" ++ s
+        formatMinutesOnly pt =
+          let (mPart, rest) = T.breakOn "M" pt
+              sPart = T.takeWhile (/= 'S') (T.drop 1 rest)
+              m = if T.null mPart then "00" else padNum $ T.unpack mPart
+              s = if T.null sPart then "00" else padNum $ T.unpack sPart
+          in T.pack $ m ++ ":" ++ s
+        padNum n = case length n of
+                     1 -> "0" ++ n
+                     _ -> n
 
 addVideo :: OAuth2Token -> T.Text -> T.Text -> IO Bool
 addVideo token playlistId videoId = do

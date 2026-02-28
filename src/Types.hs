@@ -23,6 +23,10 @@ module Types
   , AddVideoRequest(..)
   , AddVideoSnippet(..)
   , AddVideoResourceId(..)
+    -- Video details types
+  , VideosResponse(..)
+  , VideoItem(..)
+  , VideoContentDetails(..)
   ) where
 
 import Data.Aeson
@@ -186,3 +190,33 @@ instance ToJSON AddVideoResourceId where
     [ "kind" .= avr_kind r
     , "videoId" .= avr_videoId r
     ]
+
+-- =============================================================================
+-- Video Details Types
+-- =============================================================================
+
+newtype VideosResponse = VideosResponse
+  { vr_items :: [VideoItem]
+  } deriving stock (Show, Generic)
+
+instance FromJSON VideosResponse where
+  parseJSON = withObject "VideosResponse" $ \v ->
+    VideosResponse <$> v .: "items"
+
+data VideoItem = VideoItem
+  { vi_id :: T.Text
+  , vi_contentDetails :: VideoContentDetails
+  } deriving stock (Show, Generic)
+
+instance FromJSON VideoItem where
+  parseJSON = withObject "VideoItem" $ \v -> VideoItem
+    <$> v .: "id"
+    <*> v .: "contentDetails"
+
+newtype VideoContentDetails = VideoContentDetails
+  { vcd_duration :: T.Text
+  } deriving stock (Show, Generic)
+
+instance FromJSON VideoContentDetails where
+  parseJSON = withObject "VideoContentDetails" $ \v ->
+    VideoContentDetails <$> v .: "duration"
