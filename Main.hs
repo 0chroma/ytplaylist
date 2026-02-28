@@ -50,13 +50,13 @@ commandParser = hsubparser
   ( command "auth" (info (pure Auth) $ progDesc "Authenticate with YouTube")
   <> command "list-playlists" (info (pure ListPlaylists) $ progDesc "List all your playlists")
   <> command "list" (info listVideosParser $ progDesc "List all videos in a playlist")
-  <> command "remove" (info removeVideoParser $ progDesc "Remove video from playlist by video ID")
+  <> command "remove" removeVideoParserInfo
   <> command "create-playlist" (info createPlaylistParser $ progDesc "Create a new playlist")
-  <> command "add" (info addVideoParser $ progDesc "Add video to playlist")
+  <> command "add" addVideoParserInfo
   <> command "add-batch" (info addVideoBatchParser $ progDesc "Add multiple videos from file (1 ID/line)")
   <> command "delete-playlist" (info deletePlaylistParser $ progDesc "Delete a playlist")
   <> command "remove-batch" (info removeBatchParser $ progDesc "Remove videos by video ID from file (1 ID/line)")
-  <> command "move" (info moveVideoParser $ progDesc "Move video between playlists")
+  <> command "move" moveVideoParserInfo
   <> command "move-batch" (info moveBatchParser $ progDesc "Move videos between playlists from file (1 ID/line)")
   )
 
@@ -68,6 +68,9 @@ removeVideoParser = RemoveVideo
   <$> (T.pack <$> argument str (metavar "PLAYLIST-ID"))
   <*> (T.pack <$> argument str (metavar "VIDEO-ID"))
 
+removeVideoParserInfo :: ParserInfo Command
+removeVideoParserInfo = info removeVideoParser $ progDesc "Remove video from playlist by video ID" <> noIntersperse
+
 createPlaylistParser :: Parser Command
 createPlaylistParser = CreatePlaylist
   <$> (T.pack <$> argument str (metavar "TITLE"))
@@ -78,6 +81,9 @@ addVideoParser :: Parser Command
 addVideoParser = AddVideo
   <$> (T.pack <$> argument str (metavar "PLAYLIST-ID"))
   <*> (T.pack <$> argument str (metavar "VIDEO-ID"))
+
+addVideoParserInfo :: ParserInfo Command
+addVideoParserInfo = info addVideoParser $ progDesc "Add video to playlist" <> noIntersperse
 
 addVideoBatchParser :: Parser Command
 addVideoBatchParser = AddVideoBatch
@@ -97,6 +103,9 @@ moveVideoParser = MoveVideo
   <$> (T.pack <$> argument str (metavar "SOURCE-PLAYLIST-ID"))
   <*> (T.pack <$> argument str (metavar "TARGET-PLAYLIST-ID"))
   <*> (T.pack <$> argument str (metavar "VIDEO-ID"))
+
+moveVideoParserInfo :: ParserInfo Command
+moveVideoParserInfo = info moveVideoParser $ progDesc "Move video between playlists" <> noIntersperse
 
 moveBatchParser :: Parser Command
 moveBatchParser = MoveBatch
